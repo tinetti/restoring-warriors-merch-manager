@@ -1,0 +1,27 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #f5f6f8; color: #1f2937; }
+header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.5rem; background: #111827; color: white; }
+header h1 { margin: 0; font-size: 1.25rem; }
+.actions { display: flex; gap: 0.75rem; }
+button, select, input, textarea { font: inherit; }
+button { cursor: pointer; border: none; border-radius: 0.5rem; padding: 0.65rem 0.9rem; background: #2563eb; color: white; }
+button.secondary { background: #e5e7eb; color: #111827; }
+button:disabled { opacity: 0.6; cursor: not-allowed; }
+main { display: grid; grid-template-columns: 320px 1fr; min-height: calc(100vh - 72px); }
+aside { padding: 1rem; border-right: 1px solid #d1d5db; background: white; }
+aside input, aside select { width: 100%; margin-bottom: 0.75rem; padding: 0.65rem 0.75rem; border: 1px solid #d1d5db; border-radius: 0.5rem; }
+#product-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+#product-list button { width: 100%; text-align: left; background: #f3f4f6; color: #111827; }
+#editor { padding: 1.5rem; }
+.panel { background: white; border-radius: 0.75rem; padding: 1rem; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.field { display: grid; gap: 0.35rem; margin-bottom: 0.9rem; }
+.field input, .field textarea, .field select { width: 100%; border: 1px solid #d1d5db; border-radius: 0.5rem; padding: 0.65rem 0.75rem; }
+textarea { min-height: 160px; }
+table { width: 100%; border-collapse: collapse; margin-top: 1rem; background: white; }
+th, td { border: 1px solid #e5e7eb; padding: 0.6rem; text-align: left; }
+.variant-actions, .toolbar, .image-toolbar { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1rem; }
+.status { margin-top: 1rem; color: #2563eb; }
+.images { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.image-chip { padding: 0.5rem 0.75rem; border-radius: 999px; background: #eef2ff; }
+dialog { border: none; border-radius: 0.75rem; padding: 1rem 1.25rem; max-width: 540px; }

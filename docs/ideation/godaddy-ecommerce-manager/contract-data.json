@@ -1,0 +1,140 @@
+{
+  "projectName": "Godaddy Ecommerce Manager",
+  "slug": "godaddy-ecommerce-manager",
+  "date": "2026-06-17",
+  "status": "Approved",
+  "supersedes": null,
+  "gates": {
+    "dimensions": [
+      {
+        "key": "problem",
+        "label": "Problem Clarity",
+        "status": "ready",
+        "evidence": "Friend's Godaddy store UI is buggy and cumbersome for managing SKUs, prices, and variants; CSV is the known bridge format"
+      },
+      {
+        "key": "goals",
+        "label": "Goal Definition",
+        "status": "ready",
+        "evidence": "Variants and SKU rules handled cleanly, AI-assisted product descriptions, save time and reduce errors — all explicitly stated"
+      },
+      {
+        "key": "criteria",
+        "label": "Success Criteria",
+        "status": "ready",
+        "evidence": "Import file parses correctly and products appear correctly on Godaddy; idempotent uploads confirmed; AI rewrite tested per-product"
+      },
+      {
+        "key": "scope",
+        "label": "Scope Boundaries",
+        "status": "ready",
+        "evidence": "Explicitly defined: no payment/checkout, no order/inventory sync, no Godaddy API integration (CSV-only)"
+      },
+      {
+        "key": "consistency",
+        "label": "Consistency",
+        "status": "ready",
+        "evidence": "No contradictions found across all interview decisions and artifacts"
+      }
+    ]
+  },
+  "problem": [
+    "The user's friend manages a Godaddy ecommerce store selling branded merchandise (t-shirts, hats, mugs) across 3 product families.",
+    "Godaddy's store management UI is primitive and buggy for handling SKUs, pricing, variants, and product descriptions — making even basic operations tedious and error-prone.",
+    "The CSV export/import is the only reliable bridge, but Godaddy's CSV format is cumbersome: auto-generated SKUs are cryptic, variant relationships are implicit, and image handling is opaque."
+  ],
+  "goals": [
+    "Handle variants and SKU rules cleanly — auto-generate readable, consistent SKUs from variant attributes instead of Godaddy's cryptic format",
+    "AI-assisted product descriptions — per-product rewrite button for generating or improving product copy",
+    "Save time and reduce errors — local web app for comfortable editing, validated CSV export for import"
+  ],
+  "successCriteria": [
+    {
+      "criterion": "Import CSV parses correctly and products appear correctly on Godaddy after import",
+      "check": "npx tsx src/index.ts export --input products.json --output test-export.csv && diff test-export.csv godaddy-products-export.csv (structural comparison — column order, variant relationships, SKU format)"
+    },
+    {
+      "criterion": "Idempotent uploads — re-running export doesn't create duplicates or corrupt data",
+      "check": "npx tsx src/index.ts export --input products.json --output export-1.csv && npx tsx src/index.ts export --input products.json --output export-2.csv && diff export-1.csv export-2.csv (should produce identical files)"
+    },
+    {
+      "criterion": "SKU auto-generation produces consistent, readable SKUs from variant attributes",
+      "check": "npx tsx src/index.ts export --input products.json --output test-export.csv && grep -c 'SKU' test-export.csv | assert > 0 && grep SKU test-export.csv | awk -F, '{print $1}' | sort -u | assert count matches expected unique SKU count"
+    },
+    {
+      "criterion": "Images are organized into the correct directory structure for Godaddy import",
+      "check": "npx tsx src/index.ts export --input products.json --output test-export.csv && find ./godaddy-images/ -type f | assert count matches number of unique product images"
+    },
+    {
+      "criterion": "AI rewrite produces a usable product description for review",
+      "check": "Judgment call — human verifies rewritten description is readable, appropriate, and better than the original"
+    }
+  ],
+  "scope": {
+    "mvp": [
+      { "item": "CSV import: read and parse Godaddy's export CSV format", "reason": "Foundation for everything — without parsing the source format, nothing else works" },
+      { "item": "Local web app: browse and edit products with variants", "reason": "Core interaction model — replaces the buggy Godaddy UI" },
+      { "item": "Variant/SKU management: auto-generate SKUs from variant attributes", "reason": "Primary pain point identified in the interview" },
+      { "item": "CSV export: write valid Godaddy-importable CSV", "reason": "Delivery mechanism — the only way to push changes to Godaddy" },
+      { "item": "Image handling: organize images into the directory structure Godaddy expects", "reason": "Images are part of the product data that Godaddy's importer scans" }
+    ],
+    "full": [
+      { "item": "AI-assisted product descriptions: per-product rewrite button", "reason": "Explicitly requested goal; improves description quality" },
+      { "item": "Price management: easy bulk or per-product price editing", "reason": "Variants pricing is tedious in Godaddy UI" },
+      { "item": "Validation: pre-export checks for common Godaddy import errors", "reason": "Reduces failed imports and data corruption" },
+      { "item": "Product family management: group by brand (In Jesus Name, Restoring Warriors, Snapback)", "reason": "Real-world organizing principle from the interview" }
+    ],
+    "stretch": [
+      { "item": "Bulk AI rewrite across all products", "reason": "Convenience, not necessity" },
+      { "item": "Version history / diff view between edits", "reason": "Nice-to-have for audit trail" },
+      { "item": "Direct Godaddy API integration (future when API is better)", "reason": "CSV-only is intentional MVP constraint" }
+    ],
+    "outOfScope": [
+      { "item": "Payment / checkout functionality", "reason": "This is a management tool, not a storefront" },
+      { "item": "Order sync or inventory management", "reason": "Not needed for the friend's workflow" },
+      { "item": "Godaddy API integration", "reason": "CSV is the only reliable bridge; API would be a future consideration" },
+      { "item": "Multi-user support", "reason": "Single user (the friend) for now" }
+    ],
+    "future": [
+      "Codex integration — how AI assistants fit into the workflow",
+      "Direct Godaddy API once their API is stable",
+      "Multi-store support"
+    ]
+  },
+  "execution": {
+    "strategy": "Sequential",
+    "phases": [
+      {
+        "title": "Data Layer & CSV I/O",
+        "risk": "medium",
+        "blocking": true,
+        "specPath": "docs/ideation/godaddy-ecommerce-manager/spec-phase-1.md",
+        "notes": "Parse Godaddy's CSV export format, model products/variants in-memory, write valid CSV back. This is the foundation — nothing else can proceed without it."
+      },
+      {
+        "title": "Web App UI",
+        "risk": "medium",
+        "blocking": true,
+        "prereqs": ["Data Layer & CSV I/O"],
+        "specPath": "docs/ideation/godaddy-ecommerce-manager/spec-phase-2.md",
+        "notes": "Local web app for browsing and editing products with variant support. HTML/JS frontend + lightweight backend."
+      },
+      {
+        "title": "Variant/SKU Management & Image Handling",
+        "risk": "low",
+        "blocking": true,
+        "prereqs": ["Web App UI"],
+        "specPath": "docs/ideation/godaddy-ecommerce-manager/spec-phase-3.md",
+        "notes": "Auto-generate SKUs from variant attributes, organize images into Godaddy's expected directory structure."
+      },
+      {
+        "title": "AI Description & Polish",
+        "risk": "low",
+        "blocking": false,
+        "prereqs": ["Variant/SKU Management & Image Handling"],
+        "specPath": "docs/ideation/godaddy-ecommerce-manager/spec-phase-4.md",
+        "notes": "Per-product AI rewrite button, price management, validation, product family grouping."
+      }
+    ]
+  }
+}
