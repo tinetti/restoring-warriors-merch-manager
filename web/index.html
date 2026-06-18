@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Godaddy Ecommerce Manager</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Godaddy Ecommerce Manager</h1>
+      <div class="actions">
+        <button id="import-trigger">Import CSV</button>
+        <input id="import-file" type="file" accept=".csv" hidden />
+        <button id="validate-button">Validate</button>
+        <button id="export-button">Export CSV</button>
+      </div>
+    </header>
+    <main>
+      <aside>
+        <input id="search" type="search" placeholder="Search products" />
+        <select id="family-filter">
+          <option value="ALL">All families</option>
+          <option value="INJES">INJES</option>
+          <option value="RESTO">RESTO</option>
+          <option value="SNAPB">SNAPB</option>
+        </select>
+        <ul id="product-list"></ul>
+      </aside>
+      <section id="editor">
+        <p>Select a product to begin.</p>
+      </section>
+    </main>
+    <dialog id="validation-dialog"></dialog>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

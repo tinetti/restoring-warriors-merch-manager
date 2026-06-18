@@ -1,0 +1,7 @@
+dist/
+node_modules/
+*.csv.tmp
+*.json.tmp
+godaddy-import/
+.env
+.env.local
