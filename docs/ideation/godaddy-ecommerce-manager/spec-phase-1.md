@@ -1,308 +1,297 @@
 # Implementation Spec: Godaddy Ecommerce Manager - Phase 1
 
-**Contract**: ./docs/ideation/godaddy-ecommerce-manager/contract.html
-**Date**: 2026-06-17
+**Contract**: `./contract.md`
 **Estimated Effort**: M
 
 ## Technical Approach
 
-Phase 1 builds the data layer and CSV I/O — the foundation for everything. The app uses a Go backend (single binary) serving a vanilla HTML/JS frontend on localhost. This phase focuses entirely on the data model, CSV parsing, and CSV writing, verified through tests and a CLI export command.
+Phase 1 establishes the canonical catalog model and the file formats that every later phase depends on. The existing repository already has a workable TypeScript/Node shape for CSV parsing, HTTP serving, and validation, so this phase should extend those patterns rather than restart the architecture. The critical design move is to keep Godaddy's CSV as an interchange format, not the app's working model.
 
-**Key technical decisions:**
+The implementation should introduce an explicit project-document format for save/load between sessions. That document will wrap the in-memory catalog in versioned JSON so the operator can safely pause work and resume it later without staying in one browser session. CSV import converts vendor rows into the internal model; project save/load preserves that model; CSV export converts it back only at the boundary.
 
-- **Go for the backend**: Simple HTTP server + standard library file handling. No framework overhead. A single `main.go` with a clean package structure.
-- **CSV format**: We must faithfully reproduce Godaddy's export format. The sample `godaddy-products-export.csv` is the source of truth for column order, field semantics, and edge cases (empty SKUs on parent rows, variant group IDs, option columns).
-- **In-memory data model**: Products, variants, and their relationships live as Go structs. No database — everything is transient until exported.
-- **CLI-first for Phase 1**: Before building the web UI, a CLI interface (`godaddy-manager csv parse`, `godaddy-manager csv export`) lets us validate the data layer independently.
-
-**Package structure:**
-
-```
-cmd/godaddy-manager/      # CLI entry point
-internal/csv/             # Godaddy CSV parsing and writing
-internal/model/           # Product, variant, image data models
-pkg/testutil/             # Test helpers
-```
+Validation must also split into two classes: blocking structural errors and non-blocking warnings. Because the contract is correctness-first, export cannot remain a best-effort action that merely reports issues. The server must be able to determine whether the current catalog is safe to export, and the validation layer must make that decision deterministically.
 
 ## Feedback Strategy
 
-**Inner-loop command**: `go test ./internal/csv/...`
+**Inner-loop command**: `node --import tsx --test test/csv/reader.test.ts test/csv/writer.test.ts test/project-file/persistence.test.ts test/validator/export-safety.test.ts test/workflows/roundtrip.test.ts`
 
-**Playground**: Test suite with a `testdata/godaddy-products-export.csv` fixture. Create tests against the real export file, then iterate on parser/writer correctness.
+**Playground**: Test suite plus the existing CLI entry points in `src/index.ts`.
 
-**Why this approach**: Data layer changes are deterministic — parse a CSV, write a CSV, diff the output. Tests are the fastest, most reliable feedback.
+**Why this approach**: Most Phase 1 work is deterministic transformation logic, so scoped tests are the fastest and most reliable loop.
 
 ## File Changes
 
 ### New Files
 
-| File Path                                    | Purpose                                    |
-| -------------------------------------------- | ------------------------------------------ |
-| `cmd/godaddy-manager/main.go`                | CLI entry point; subcommands for parse and export |
-| `internal/model/product.go`                  | Product, Variant, ProductFamily types      |
-| `internal/csv/reader.go`                     | Parse Godaddy's CSV export format into Go structs |
-| `internal/csv/writer.go`                     | Write Go structs back to Godaddy-compatible CSV |
-| `internal/csv/reader_test.go`                | Tests for CSV parsing against real export  |
-| `internal/csv/writer_test.go`                | Tests for CSV round-trip (parse → write → parse) |
-| `go.mod`                                     | Go module definition                       |
-| `go.sum`                                     | Go dependency checksums                    |
-| `testdata/godaddy-products-export.csv`       | Copy of the sample export for tests        |
-| `.gitignore`                                 | Ignore `go.sum`, binaries, `.env`          |
+| File Path | Purpose |
+| --- | --- |
+| `src/project-file/types.ts` | Defines the versioned local project-document format used for save/load between sessions. |
+| `src/project-file/serializer.ts` | Serializes and parses project documents without leaking transport or UI concerns into the model layer. |
+| `test/project-file/persistence.test.ts` | Verifies project documents round-trip cleanly and reject malformed payloads. |
+| `test/validator/export-safety.test.ts` | Verifies blocking-vs-warning validation behavior for export safety decisions. |
+| `test/workflows/roundtrip.test.ts` | End-to-end fixture test for CSV import → model edit → CSV export → re-import invariants. |
 
 ### Modified Files
 
-| File Path                    | Changes                      |
-| ---------------------------- | ---------------------------- |
-| `godaddy-products-export.csv` (root) | Kept as reference artifact; testdata copy used for tests |
+| File Path | Changes |
+| --- | --- |
+| `src/model/types.ts` | Tighten the canonical catalog shape and ensure it is safe for both project-file persistence and later UI phases. |
+| `src/csv/reader.ts` | Make import mapping explicit and loss-aware for fields that must survive round-trip export. |
+| `src/csv/writer.ts` | Preserve contract-critical invariants when exporting back to Godaddy CSV. |
+| `src/validator/validator.ts` | Split issues into blocking export errors vs non-blocking warnings/information. |
+| `src/index.ts` | Add project-file oriented CLI helpers or smoke commands as needed for local verification. |
+| `test/helpers/sample-product.ts` | Expand fixture coverage for project-file and validation tests. |
 
 ### Deleted Files
 
-_None — this is a new project._
+_None._
 
 ## Implementation Details
 
-### Data Model (`internal/model/product.go`)
+### Project Document Format
 
-**Overview**: Defines the core data structures representing Godaddy products, their variants, and associated metadata.
+**Pattern to follow**: `src/model/types.ts`
 
-```go
-package model
+**Overview**: Introduce a versioned JSON wrapper around the catalog so the app can persist a working project between sessions without pretending the Godaddy CSV is the native editing format.
 
-// Product represents a top-level product in Godaddy.
-type Product struct {
-    ID           string          // PRODUCT_ID from CSV
-    Name         string          // NAME column
-    Type         string          // TYPE (PHYSICAL)
-    Shortcode    string          // SHORTCODE column
-    Status       string          // STATUS (ACTIVE, DRAFT, etc.)
-    Description  string          // DESCRIPTION (may contain HTML entities)
-    Weight       float64         // WEIGHT
-    WeightUnit   string          // UNIT OF WEIGHT (lbs, oz, etc.)
-    Available    bool            // AVAILABLE (YES/NO)
-    Price        float64         // PRICE
-    SalePrice    *float64        // SALE PRICE (nil if not on sale)
-    Family       ProductFamily   // Which brand family
-    Variants     []Variant       // Child variants
-    Images       []ImageRef      // Associated image files
+```ts
+export interface ProjectDocument {
+  schemaVersion: 1;
+  source: {
+    kind: 'godaddy-csv' | 'project-file';
+    importedAt: string;
+    originalFileName?: string;
+  };
+  products: Product[];
 }
 
-// Variant represents a single variant (size/color combination) of a product.
-type Variant struct {
-    SKU              string    // Auto-generated or from Godaddy
-    Option1Name      string    // e.g., "Color" or "Style"
-    Option1Value     string    // e.g., "Black" or "Brooklyn"
-    Option2Name      string    // e.g., "Size" (may be empty)
-    Option2Value     string    // e.g., "Small" (may be empty)
-    Price            float64   // Variant-specific price (nil = inherit from parent)
-    SalePrice        *float64  // Variant-specific sale price
-    Available        bool      // Per-variant availability
-    Weight           float64   // Per-variant weight
-    OnHand           int       // Inventory count (often wrong in Godaddy)
+export function serializeProjectDocument(document: ProjectDocument): string;
+export function parseProjectDocument(content: string): ProjectDocument;
+```
+
+**Key decisions**:
+
+- The project document is versioned from day one. This avoids silent compatibility breakage later.
+- The document stores only catalog state and provenance metadata; it does not store UI-only state.
+- Parsing is strict. Unknown top-level shapes or invalid schema versions should fail fast.
+
+**Implementation steps**:
+
+1. Add `ProjectDocument` types in `src/project-file/types.ts`.
+2. Implement serializer/parser helpers in `src/project-file/serializer.ts`.
+3. Validate parsed payloads narrowly enough to reject malformed product arrays or missing required fields.
+4. Keep file I/O outside this module so the serializer remains reusable by CLI and HTTP layers.
+
+**Feedback loop**:
+
+- **Playground**: Create `test/project-file/persistence.test.ts` with a smoke round-trip and one malformed-input failure case before implementation.
+- **Experiment**: Test a valid document, an unknown `schemaVersion`, and a document missing `products`.
+- **Check command**: `node --import tsx --test test/project-file/persistence.test.ts`
+
+### CSV Import/Export Invariants
+
+**Pattern to follow**: `src/csv/reader.ts`, `src/csv/writer.ts`
+
+**Overview**: Tighten the CSV boundary so the fields named in the contract survive re-export exactly where required: product/variant relationships, prices, option values, and pre-existing SKUs.
+
+```ts
+export interface RoundTripInvariantResult {
+  missingParents: string[];
+  orphanVariants: string[];
+  duplicateSkus: string[];
 }
 
-// ImageRef links an image file to a product or variant.
-type ImageRef struct {
-    FileName string // Local filename
-    AltText  string // Alt text
-    IsPrimary bool  // Whether this is the product's primary image
+export function parseGodaddyCsv(content: string): Product[];
+export function serializeGodaddyCsv(products: Product[]): string;
+```
+
+**Key decisions**:
+
+- Parent/child linkage remains keyed by Godaddy's identifiers, not UI-generated ordering.
+- Existing variant SKUs are treated as opaque identity fields in Phase 1; no normalization or cleanup pass is allowed here.
+- Import should preserve enough raw values that export does not unintentionally rewrite semantically important fields.
+
+**Implementation steps**:
+
+1. Review the current parser against the real fixture in `testdata/godaddy-products-export.csv`.
+2. Add tests for invariants that matter more than byte-for-byte equality: parent linkage, option columns, prices, and SKU preservation.
+3. Ensure export always writes stable row ordering so follow-on tests and diffs stay readable.
+4. Keep any unavoidable lossy transformations explicit and documented in the test names.
+
+**Feedback loop**:
+
+- **Playground**: Create `test/workflows/roundtrip.test.ts` using the real fixture before changing reader/writer logic.
+- **Experiment**: Import the fixture, modify one product name, re-export, then re-import and assert parent linkage, prices, and SKUs remain correct.
+- **Check command**: `node --import tsx --test test/csv/reader.test.ts test/csv/writer.test.ts test/workflows/roundtrip.test.ts`
+
+### Export Safety Validation
+
+**Pattern to follow**: `src/validator/validator.ts`
+
+**Overview**: Reframe validation as an export-safety gate, not just a lint pass. The validator must answer whether export is allowed and why.
+
+```ts
+export interface ValidationIssue {
+  severity: 'error' | 'warning' | 'info';
+  field: string;
+  message: string;
+  blocksExport: boolean;
 }
 
-// ProductFamily identifies which brand group a product belongs to.
-type ProductFamily string
+export interface ValidationReport {
+  issues: ValidationIssue[];
+  canExport: boolean;
+}
 
-const (
-    FamilyInJesusName    ProductFamily = "INJES"
-    FamilyRestoringWarriors ProductFamily = "RESTO"
-    FamilySnapback           ProductFamily = "SNAPB"
-)
+export function validateProducts(products: Product[]): ValidationReport;
 ```
 
-**Key decisions:**
+**Key decisions**:
 
-- `ProductFamily` is an enum type, not a string — prevents typos and makes future brand additions explicit.
-- `Variant.SalePrice` and `Variant.Price` are separate from `Product` to support variant-level pricing (even though current data may not use it).
-- `Weight` is `float64` to match CSV numeric format; `0.0` values are kept (the Godaddy bug where hoodies show 0 lbs is a data issue, not something we fix in parsing).
+- `blocksExport` must be explicit on each issue. Inferring it from severity later is brittle.
+- Duplicate SKUs, broken parent/child references, and incomplete required option data are blocking.
+- Empty descriptions or suspicious but still importable data remain warnings unless real imports prove otherwise.
 
-### CSV Reader (`internal/csv/reader.go`)
+**Implementation steps**:
 
-**Overview**: Parses Godaddy's export CSV into the in-memory model. Handles the parent/variant relationship via VARIANT GROUP ID matching.
+1. Convert validator output from a flat list to a report with `canExport`.
+2. Add blocking rules for structural failures named in the contract.
+3. Keep warnings for softer data-quality issues instead of over-blocking the operator.
+4. Update existing tests to assert both issue content and export eligibility.
 
-```go
-package csv
+**Feedback loop**:
 
-import "github.com/nicknisi/godaddy-ecommerce-manager/internal/model"
-
-// ReadGodaddyCSV parses a Godaddy product export CSV file.
-func ReadGodaddyCSV(path string) ([]model.Product, error)
-```
-
-**Implementation steps:**
-
-1. Define CSV column index mapping from header row (columns may appear in any order).
-2. Read all rows. Separate parent rows (TYPE=PHYSICAL, empty SKU) from variant rows (populated SKU, non-empty VARIANT GROUP ID).
-3. Build a map of product ID → Product (from parent rows).
-4. For each variant row, find its parent by matching VARIANT GROUP ID to PRODUCT_ID, append to parent's Variants slice.
-5. Handle edge cases: products with no variants, variants with missing option columns, HTML entities in descriptions.
-6. Set `Family` on each product by parsing the prefix from the name or shortcode.
-
-**Key decisions:**
-
-- Parent rows have empty SKU — this is the Godaddy convention. We detect parents by `SKU == ""` AND `TYPE == "PHYSICAL"`.
-- Variant-to-parent linkage uses `VARIANT GROUP ID` matching `PRODUCT_ID` of the parent. This is the reliable join key.
-- `OPTION 1 NAME` and `OPTION 1 VALUE` are used; `OPTION 2 NAME` and `OPTION 2 VALUE` may be populated for products with two variant dimensions (e.g., Color + Size). Some products may only have one variant dimension.
-- HTML entities in descriptions (e.g., `&amp;`) are kept as-is — the CSV writer will handle re-encoding.
-
-**Feedback loop:**
-
-- **Playground**: Create `testdata/godaddy-products-export.csv` from the real export. Write `reader_test.go` with tests parsing it.
-- **Experiment**: Test parsing all 3 product families (INJES, RESTO, SNAPB). Verify variant counts match expectations. Test with empty option columns.
-- **Check command**: `go test ./internal/csv/... -v`
-
-### CSV Writer (`internal/csv/writer.go`)
-
-**Overview**: Writes the in-memory model back to a Godaddy-compatible CSV file. Must reproduce the same column order and format as the export.
-
-```go
-package csv
-
-// WriteGodaddyCSV writes products to a Godaddy-importable CSV file.
-func WriteGodaddyCSV(products []model.Product, path string) error
-```
-
-**Implementation steps:**
-
-1. Define the header row in Godaddy's exact column order.
-2. Write parent rows first (TYPE=PHYSICAL, no SKU, description in DESCRIPTION column, variant group ID = product ID).
-3. For each variant, write a row with populated SKU, variant group ID matching parent's product ID, OPTION 1/2 columns.
-4. Encode special characters (HTML entities in descriptions).
-5. Write a trailing row or header to ensure Godaddy's importer recognizes the file.
-
-**Key decisions:**
-
-- Column order is critical — Godaddy's importer is positional. Match the export's exact order.
-- Parent rows and variant rows share the same header — Godaddy uses the VARIANT GROUP ID column to link them, not a separate relationship structure.
-- SKU format for auto-generation: see Phase 3 (not implemented here, but the writer must accept whatever SKU is in the model).
-
-**Feedback loop:**
-
-- **Playground**: Parse the real export → write to a new file → parse that file again → compare. Round-trip equality is the test.
-- **Experiment**: Parse → modify a product name → export → manually verify the modified name appears in the CSV.
-- **Check command**: `go test ./internal/csv/... -v -run TestRoundTrip`
-
-### CLI (`cmd/godaddy-manager/main.go`)
-
-**Overview**: Simple CLI with two subcommands for Phase 1: `parse` (read a CSV and dump JSON to stdout for debugging) and `export` (read JSON from stdin or file, write CSV to a path).
-
-```
-godaddy-manager parse --input products-export.csv --output debug.json
-godaddy-manager export --input products.json --output new-export.csv
-```
-
-**Implementation steps:**
-
-1. Initialize Go module (`go mod init github.com/nicknisi/godaddy-ecommerce-manager`).
-2. Create CLI with `flag` or `spf13/cobra` (start with `flag` for simplicity, upgrade to cobra later if needed).
-3. Implement `parse` subcommand: call `ReadGodaddyCSV`, marshal to JSON, write to file/stdout.
-4. Implement `export` subcommand: read JSON from file, call `WriteGodaddyCSV`.
-5. Add `--help` flag output.
-
-**Key decisions:**
-
-- Start with stdlib `flag` to minimize dependencies. Cobra is nicer but adds a dependency that isn't needed for Phase 1.
-- JSON format for intermediate storage is a debugging convenience — not a formal format. The web app (Phase 2) will have its own data format.
-
-**Feedback loop:**
-
-- **Playground**: `go run cmd/godaddy-manager/main.go parse --input testdata/godaddy-products-export.csv` — should produce a JSON dump.
-- **Experiment**: Parse the real export, modify a product in the JSON, write it back, and verify the CSV looks right.
-- **Check command**: `go build ./cmd/godaddy-manager/ && ./godaddy-manager parse --help`
+- **Playground**: Create `test/validator/export-safety.test.ts` with one exportable catalog and one blocked catalog before modifying the validator.
+- **Experiment**: Test duplicate SKU, missing option value, negative price, and empty description cases separately.
+- **Check command**: `node --import tsx --test test/validator/validator.test.ts test/validator/export-safety.test.ts`
 
 ## Data Model
 
-See `internal/model/product.go` above. The model is the single source of truth:
+### State Shape
 
+```ts
+export interface Product {
+  id: string;
+  parentId: string;
+  name: string;
+  type: string;
+  shortcode: string;
+  status: string;
+  description: string;
+  weight: number | null;
+  weightUnit: string;
+  available: boolean;
+  price: number | null;
+  salePrice: number | null;
+  family: ProductFamily;
+  variants: Variant[];
+  images: ImageRef[];
+  aiDescription: string | null;
+}
+
+export interface ProjectDocument {
+  schemaVersion: 1;
+  source: {
+    kind: 'godaddy-csv' | 'project-file';
+    importedAt: string;
+    originalFileName?: string;
+  };
+  products: Product[];
+}
 ```
-Product
-├── ID, Name, Type, Shortcode, Status, Description, Weight, WeightUnit
-├── Available, Price, SalePrice
-├── Family (enum)
-├── []Variant
-│   ├── SKU, Option1Name/Value, Option2Name/Value
-│   ├── Price, SalePrice, Available, Weight, OnHand
-└── []ImageRef
-    ├── FileName, AltText, IsPrimary
-```
+
+Phase 1 should not add speculative fields for later features unless they are required for persistence or export safety.
+
+## API Design
+
+_No new HTTP endpoints are required in this phase._ The project-file and export-safety behavior should be exposed first through modules and tests, then surfaced over HTTP in Phase 2.
 
 ## Testing Requirements
 
 ### Unit Tests
 
-| Test File                  | Coverage              |
-| -------------------------- | --------------------- |
-| `internal/csv/reader_test.go` | Parse parent rows, parse variant rows, handle empty options, handle HTML entities |
-| `internal/csv/writer_test.go` | Write parent+variants, round-trip equality, column order preservation |
-| `model/product_test.go`    | Family enum, variant attachment |
+| Test File | Coverage |
+| --- | --- |
+| `test/csv/reader.test.ts` | Real-fixture parsing, parent/variant linkage, field preservation. |
+| `test/csv/writer.test.ts` | Export row shape, stable ordering, preservation of required fields. |
+| `test/project-file/persistence.test.ts` | Project-document serialization, parsing, and schema validation. |
+| `test/validator/validator.test.ts` | Existing warnings/errors plus export eligibility semantics. |
+| `test/validator/export-safety.test.ts` | Structural blockers for unsafe export scenarios. |
 
-**Key test cases:**
+**Key test cases**:
 
-- Parse the real `godaddy-products-export.csv` — verify all 12+ products parsed, correct variant counts
-- Parse a CSV with a product that has no variants (edge case)
-- Parse a CSV where OPTION 2 is empty (only 1 variant dimension)
-- Round-trip: parse → write → parse — inner equality (ignore line endings)
-- Writer preserves HTML entities in descriptions (`&amp;` → `&amp;`)
-- Writer column order matches the expected Godaddy format
+- Real fixture imports into the expected number of products and variants.
+- Existing SKUs survive a parse/export/re-parse cycle unchanged.
+- Duplicate SKUs block export.
+- Missing required option data blocks export.
+- Empty descriptions warn but do not automatically block export.
+- Project documents reject malformed JSON or unsupported schema versions.
+
+### Integration Tests
+
+| Test File | Coverage |
+| --- | --- |
+| `test/workflows/roundtrip.test.ts` | Representative catalog import → edit → export → re-import workflow. |
+
+**Key scenarios**:
+
+- Happy path with an existing catalog edit.
+- Export blocked when a structural validation error is introduced.
+- Project document persists edits and reloads them without field drift.
 
 ### Manual Testing
 
-- [ ] `go run cmd/godaddy-manager/main.go parse --input testdata/godaddy-products-export.csv --output debug.json` — check JSON structure
-- [ ] Parse real export, write CSV, manually inspect both CSVs side by side
-- [ ] Verify parent rows have empty SKU and variant rows have populated SKUs
+- [ ] Run the round-trip workflow test against the real fixture.
+- [ ] Use the CLI to parse the fixture and inspect the resulting JSON/project document.
+- [ ] Intentionally create a duplicate SKU in a test payload and verify export is rejected.
 
 ## Error Handling
 
-| Error Scenario              | Handling Strategy                                      |
-| --------------------------- | ------------------------------------------------------ |
-| CSV file not found          | Return error with file path, exit CLI with message     |
-| Malformed CSV (wrong column count) | Return parse error with line number, abort  |
-| Variant references unknown parent | Log warning, skip variant, continue parsing    |
-| Duplicate PRODUCT_ID        | Log warning, overwrite with latest (Godaddy convention) |
-| Empty product name          | Allow (some Godaddy exports have blank names)          |
+| Error Scenario | Handling Strategy |
+| --- | --- |
+| Malformed CSV input | Return a parse error with enough context to identify the bad import; do not produce partial persisted state. |
+| Unsupported project-file version | Reject the load with a clear schema-version error. |
+| Duplicate or structurally invalid variant data | Report blocking validation issues and set `canExport` to `false`. |
+| Missing non-critical content such as descriptions | Report warnings without blocking save/load or export. |
 
 ## Failure Modes
 
-| Component    | Failure Mode              | Trigger                             | Impact                          | Mitigation                      |
-| ------------ | ------------------------- | ----------------------------------- | ------------------------------- | ------------------------------- |
-| CSV Reader   | Parent row missing SKU    | Godaddy exported with no PRODUCT_ID | Cannot link variants to parent  | Log warning, skip variants     |
-| CSV Reader   | VARIANT GROUP ID mismatch | Godaddy data corruption             | Orphaned variants               | Log warning, keep as standalone |
-| CSV Writer   | Column order wrong        | Headers defined in wrong order      | Godaddy import fails silently   | Pin header order to export file |
-| CSV Writer   | Description truncation    | Long description with newlines      | Truncated product description   | CSV escaping handles newlines   |
-| CLI          | Invalid JSON input        | Malformed intermediate JSON         | Export fails                    | Clear error message with path   |
+| Component | Failure Mode | Trigger | Impact | Mitigation |
+| --- | --- | --- | --- | --- |
+| CSV bridge | Silent field drift | Import/export remaps an important field incorrectly | The operator trusts an export that changed live catalog meaning | Pin invariants in round-trip tests rather than relying on ad hoc inspection |
+| Project document | Schema drift | Future fields are added without versioning | Older saved files become unreadable or misread | Version the document immediately and fail fast on unknown versions |
+| Validator | Over-blocking | Warning-like conditions are treated as hard failures | The operator cannot export valid work | Separate `blocksExport` from message severity |
+| Validator | Under-blocking | Structural errors are treated as warnings | Bad data reaches Godaddy | Add blocking tests for every contract-critical invariant |
 
 ## Validation Commands
 
 ```bash
-# Run all tests
-go test ./...
+# Type checking
+npm run typecheck
 
-# Run just CSV tests
-go test ./internal/csv/...
+# Linting
+npm run lint
 
-# Build the CLI
-go build -o godaddy-manager ./cmd/godaddy-manager/
+# Scoped Phase 1 tests
+node --import tsx --test test/csv/reader.test.ts test/csv/writer.test.ts test/project-file/persistence.test.ts test/validator/export-safety.test.ts test/workflows/roundtrip.test.ts
 
-# Test parse subcommand
-./godaddy-manager parse --input testdata/godaddy-products-export.csv --output /dev/null
+# Full test suite
+npm test
+
+# Build
+npm run build
 ```
 
 ## Rollout Considerations
 
-- No feature flags needed — this is a CLI tool, no deployment.
-- The `godaddy-products-export.csv` in `testdata/` is test data only — not committed if it contains sensitive info (it shouldn't, but verify).
+- No feature flag is needed; this is foundational behavior behind existing local workflows.
+- Preserve backward compatibility with the current CSV commands in `src/index.ts`.
+- If project-file format changes later, introduce a new `schemaVersion` instead of mutating the meaning of version 1.
 
 ## Open Items
 
-- [ ] Confirm exact column order from the real Godaddy export (we have the sample, but verify edge columns like REGION, HANDLE, etc.)
-- [ ] Decide: should the CLI accept JSON from stdin or only from files? (Files are simpler for Phase 1)
+- [ ] Decide whether project documents should record the original CSV path or only the original filename for provenance.
+- [ ] Confirm whether any Godaddy columns outside the current fixture must be preserved verbatim in future imports.
 
 ---
 

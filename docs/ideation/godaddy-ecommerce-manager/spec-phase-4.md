@@ -1,55 +1,43 @@
 # Implementation Spec: Godaddy Ecommerce Manager - Phase 4
 
-**Contract**: ./docs/ideation/godaddy-ecommerce-manager/contract.html
-**Date**: 2026-06-17
+**Contract**: `./contract.md`
 **Estimated Effort**: M
-
-**Prerequisites**: Phase 1 (Data Layer), Phase 2 (Web App UI), Phase 3 (Variant/SKU & Images)
 
 ## Technical Approach
 
-Phase 4 adds AI-assisted product descriptions (per-product "AI rewrite" button), price management utilities, pre-export validation, and product family grouping polish. The AI feature is the only non-trivial new backend logic — it calls an external LLM API to rewrite product descriptions. Everything else is UI polish and validation.
+Phase 4 extends the safe catalog workflow to include the asset side of a Godaddy import. The core rule is the same as earlier phases: keep the operator in a localhost tool, and keep the external vendor format at the boundary. The app should manage image references in the internal model, then build a predictable export package on demand.
 
-**Key technical decisions:**
+The current repository already has a basic `ImageHandler` and an export-time copy step. This phase should formalize that into a first-class packaging flow rather than a side effect hidden inside CSV export. The operator needs to know which images belong to which product, which are missing, and where the package was written.
 
-- **AI integration is optional/configurable**: The app works fine without an AI API key. The "AI Rewrite" button is disabled and shows "Configure AI API key in settings" if no key is set. This means the AI feature doesn't block shipping the rest of the phase.
-- **Provider-agnostic API wrapper**: Start with OpenAI-compatible API (OpenAI, Anthropic, etc.) via a single `ChatCompletion`-style interface. Easy to add more providers later.
-- **Pre-export validation**: A simple validation step before CSV export that checks for common issues (missing SKUs, negative prices, empty descriptions, unclosed HTML tags).
-- **Price presets**: Quick-select buttons for common price points based on product type ($25 t-shirt, $42 hoodie, $22 snapback) as shown in the interview.
+Because browsers are poor at writing arbitrary local directories, the server should remain responsible for building the export bundle into a known output directory on disk. The UI should trigger the packaging flow and display the result path plus any missing-image warnings. The package format should remain simple: Godaddy CSV plus staged image files in a documented directory layout. If a real-world import test reveals an exact Godaddy naming rule, encode that rule in one place.
 
 ## Feedback Strategy
 
-**Inner-loop command**: `go test ./internal/ai/... -v`
+**Inner-loop command**: `node --import tsx --test test/model/image-handler.test.ts test/model/export-bundle.test.ts`
 
-**Playground**: Test-driven AI logic with mock responses. For the UI, interact in the browser at `localhost:8080`.
+**Playground**: Scoped file-system tests plus the local app for image upload/package flows.
 
-**Why this approach**: AI prompt engineering benefits from quick test iterations. The UI feedback is the standard browser refresh loop.
+**Why this approach**: Packaging is mostly deterministic file I/O, so temp-directory tests are the fastest loop; the UI is mainly a thin trigger and status surface.
 
 ## File Changes
 
 ### New Files
 
-| File Path                                                | Purpose                                    |
-| -------------------------------------------------------- | ------------------------------------------ |
-| `internal/ai/provider.go`                                | LLM API interface and OpenAI-compatible provider |
-| `internal/ai/provider_test.go`                           | Tests with mocked API responses            |
-| `internal/ai/rewrite.go`                                 | Description rewrite logic and prompt building |
-| `internal/ai/rewrite_test.go`                            | Tests for prompt construction              |
-| `internal/validator/validator.go`                        | Pre-export validation rules                |
-| `internal/validator/validator_test.go`                   | Tests for validation rules                 |
-| `web/components/ai-rewrite.js`                           | AI rewrite button and UI in product edit   |
-| `web/components/price-presets.js`                        | Quick price selection UI                   |
-| `web/components/validation-bar.js`                       | Pre-export validation status bar           |
-| `web/styles.css`                                         | New styles for AI button, price presets    |
+| File Path | Purpose |
+| --- | --- |
+| `src/model/export-bundle.ts` | Builds a complete export package result that includes CSV bytes, image staging, and warnings. |
+| `test/model/export-bundle.test.ts` | Verifies package assembly, path layout, and missing-image handling. |
+| `test/server/image-package.test.ts` | Covers image-related API and package responses over HTTP. |
 
 ### Modified Files
 
-| File Path                          | Changes                                    |
-| ---------------------------------- | ------------------------------------------ |
-| `internal/model/product.go`        | Add `AIDescription` field to Product (stores AI-generated draft) |
-| `internal/server/handlers.go`      | Add AI rewrite endpoint, validation endpoint |
-| `cmd/godaddy-manager/main.go`      | Add `--ai-api-key` flag                    |
-| `internal/csv/writer.go`           | Write `AIDescription` if populated (optional) |
+| File Path | Changes |
+| --- | --- |
+| `src/model/image-handler.ts` | Expand from raw copy helper into a product-aware image staging utility with warnings. |
+| `src/model/types.ts` | Add any minimal image metadata needed for package assembly, such as relative source path or ordering. |
+| `src/server/app.ts` | Add package-oriented responses and image-management endpoints that surface warnings clearly. |
+| `web/app.js` | Add image management affordances and export-package status display. |
+| `src/index.ts` | Support configuring the output directory cleanly for package generation. |
 
 ### Deleted Files
 
@@ -57,356 +45,252 @@ _None._
 
 ## Implementation Details
 
-### AI Provider Interface (`internal/ai/provider.go`)
+### Export Bundle Builder
 
-**Overview**: Abstraction over LLM API calls. Start with OpenAI-compatible API.
+**Pattern to follow**: `src/csv/writer.ts`, `src/model/image-handler.ts`
 
-```go
-package ai
+**Overview**: Create one module that owns package assembly so CSV export and image staging do not drift apart.
 
-// Provider is the interface for LLM API providers.
-type Provider interface {
-    // Chat sends a prompt and returns the model's response.
-    Chat(ctx context.Context, messages []Message) (string, error)
+```ts
+export interface ExportBundleResult {
+  outputDir: string;
+  csvPath: string;
+  imageFiles: string[];
+  warnings: string[];
 }
 
-// Message represents a chat message.
-type Message struct {
-    Role    string // "system", "user", "assistant"
-    Content string
+export async function buildExportBundle(products: Product[], options: {
+  outputDir: string;
+  imageSourceDir: string;
+}): Promise<ExportBundleResult>;
+```
+
+**Key decisions**:
+
+- Bundle assembly owns both CSV writing and image staging; callers should not coordinate those steps manually.
+- Warnings are part of the result, not thrown exceptions, when packaging can proceed despite missing assets.
+- Output layout must be deterministic so the operator can rerun packaging idempotently.
+
+**Implementation steps**:
+
+1. Add `src/model/export-bundle.ts` to orchestrate CSV generation plus image staging.
+2. Write the CSV into the chosen output directory with a stable filename.
+3. Collect image staging warnings for missing files or unsupported formats.
+4. Return the full bundle result to the caller for UI/server display.
+
+**Feedback loop**:
+
+- **Playground**: Create `test/model/export-bundle.test.ts` with a temp source directory and one missing image reference before implementation.
+- **Experiment**: Package a product with zero images, one image, and a missing-image reference.
+- **Check command**: `node --import tsx --test test/model/export-bundle.test.ts`
+
+### Image Staging and Registry Behavior
+
+**Pattern to follow**: `src/model/image-handler.ts`
+
+**Overview**: Turn image handling into a more explicit contract: each product owns ordered image references, and staging copies those references into the export package predictably.
+
+```ts
+export interface OrganizedImage {
+  productId: string;
+  sourcePath: string;
+  destinationPath: string;
+  destinationRelativePath: string;
+  missing?: boolean;
 }
 
-// OpenAIProvider implements Provider for OpenAI-compatible APIs.
-type OpenAIProvider struct {
-    APIKey string
-    BaseURL string  // Default: "https://api.openai.com/v1"
-    Model  string  // Default: "gpt-4o-mini" (cheap, fast, good enough for descriptions)
-}
-
-func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message) (string, error)
-```
-
-**Key decisions:**
-
-- `gpt-4o-mini` as default model — cheap ($0.15/1M tokens), fast, produces clean text. Upgradable to `gpt-4o` later if quality is a concern.
-- `BaseURL` is configurable — allows using any OpenAI-compatible endpoint (OpenRouter, local Ollama, etc.).
-- API key loaded from `--ai-api-key` CLI flag or `GODADDY_AI_API_KEY` environment variable. No key = AI feature disabled.
-- Timeout: 30 seconds per request. Show a loading state in the UI during the request.
-
-**Implementation steps:**
-
-1. Define `Provider` interface and `Message` struct.
-2. Implement `OpenAIProvider` with HTTP POST to `/chat/completions`.
-3. Read API key from flag or env var. Return error if neither is set.
-4. Handle API errors (rate limit, invalid key, model not found) — map to user-friendly messages.
-5. Write tests with `httptest.NewServer` returning mock JSON.
-
-### Description Rewrite Logic (`internal/ai/rewrite.go`)
-
-**Overview**: Builds the prompt and orchestrates the rewrite flow.
-
-```go
-package ai
-
-// RewriteDescription sends the product description to the AI model
-// and returns an improved version.
-func RewriteDescription(ctx context.Context, provider Provider, product *model.Product) (string, error)
-```
-
-**System prompt** (hardcoded):
-
-```
-You are a professional ecommerce copywriter. You write product descriptions
-that are compelling, accurate, and optimized for conversion.
-
-Rules:
-- Keep it between 2-4 short paragraphs
-- Write in an engaging, warm tone appropriate for faith-based merchandise
-- Include the key product details (material, fit, design) naturally in the text
-- Avoid markdown formatting — plain text only
-- Do NOT use phrases like "This product features" or "Introducing"
-- Write as if you're explaining the product to a friend
-```
-
-**User prompt** (built dynamically):
-
-```
-Rewrite this product description for a Godaddy ecommerce store:
-
-Product Name: {product.Name}
-Product Type: {product.Type}
-Variant Attributes: {color}, {size} (if applicable)
-Original Description: {product.Description}
-
-Important context:
-- This is faith-based merchandise with a religious/spiritual theme
-- Target audience: Christians who want to wear their faith
-- Keep the religious message intact but make the description more engaging
-```
-
-**Key decisions:**
-
-- System prompt is hardcoded — not a config. The tone and rules are specific to this use case.
-- User prompt includes variant attributes if the rewrite is called from a variant context.
-- The AI response replaces `product.Description` in the editor — it's not auto-saved. User reviews and accepts/rejects.
-- Cost estimate: ~100 tokens per request at $0.15/1M input tokens ≈ $0.000015 per rewrite. Negligible cost even with many attempts.
-
-**Implementation steps:**
-
-1. Implement `RewriteDescription()` — build messages, call `provider.Chat()`, return response.
-2. HTML entity decode the original description before sending to AI (the original has `&amp;`, `&lt;`, etc. from the CSV).
-3. HTML entity encode the response before storing (to match CSV format).
-4. Handle errors: API key missing → return specific error "AI not configured", timeout → "Request timed out", API error → return raw error.
-5. Write tests with mocked provider.
-
-**Feedback loop:**
-
-- **Playground**: `go test ./internal/ai/... -v -run TestRewrite`
-- **Experiment**: Test the prompt with real product descriptions from the Godaddy export. Verify the AI output is on-brand (faith-based, warm tone).
-- **Check command**: `go test ./internal/ai/... -v -count=1`
-
-### AI Rewrite Endpoint (`internal/server/handlers.go`)
-
-```
-POST /api/products/:id/rewrite-description
-Body: {} (empty — uses product data)
-Response: { "rewritten": "New description text" }
-```
-
-**Implementation steps:**
-
-1. Parse `:id` from URL.
-2. Load product from store.
-3. Call `ai.RewriteDescription(ctx, provider, product)`.
-4. Return the rewritten description.
-
-**Error handling:**
-
-| Error               | HTTP Status | Response                      |
-| ------------------- | ----------- | ----------------------------- |
-| AI not configured   | 400         | `{ "error": "AI not configured. Set GODADDY_AI_API_KEY env var or --ai-api-key flag." }` |
-| API error           | 502         | `{ "error": "AI service error: <details>" }` |
-| Product not found   | 404         | `{ "error": "Product not found" }` |
-
-### Frontend: AI Rewrite Button (`web/components/ai-rewrite.js`)
-
-**Overview**: Button in the product edit view that triggers the AI rewrite.
-
-```
-┌─────────────────────────────────────┐
-│ Description:                        │
-│ ┌─────────────────────────────────┐│
-│ │ Your faith isn't just a part    ││
-│ │ of your day...                  ││
-│ │ [3 paragraphs of text...]       ││
-│ └─────────────────────────────────┘│
-│                                     │
-│ ✨ AI Rewrite  (requires API key)  │
-└─────────────────────────────────────┘
-```
-
-**Behavior:**
-
-1. User clicks "AI Rewrite".
-2. Button shows spinner, text changes to "Rewriting...".
-3. API call is made to `POST /api/products/:id/rewrite-description`.
-4. On success, the description textarea is replaced with the rewritten text.
-5. User can click "Accept" (save) or "Discard" (revert to original).
-6. On error, show error message and reset button.
-
-**Implementation steps:**
-
-1. Add a button below the description textarea.
-2. On click, fetch `/api/products/:id/rewrite-description`.
-3. Show loading state (spinner + "Rewriting..." text).
-4. On success, replace textarea content, show Accept/Discard buttons.
-5. Accept → save the product (calls existing save flow).
-6. Discard → revert textarea to original content.
-7. Handle AI-not-configured state: button disabled, tooltip shows "Set GODADDY_AI_API_KEY to enable".
-
-### Price Presets (`web/components/price-presets.js`)
-
-**Overview**: Quick-select buttons for common price points based on product type.
-
-```
-Price: $25.00  [T-Shirt $25] [Hoodie $42] [Snapback $22] [Custom ▸]
-```
-
-**Key decisions:**
-
-- Price presets are contextual — they show the right preset buttons based on the product's type (detected from the product name or a new field).
-- "Custom" button opens a small input for non-standard pricing.
-- Not a validation rule — just a convenience UI. User can still type any price.
-
-**Implementation steps:**
-
-1. Detect product type from name keywords: "t-shirt" → $25, "hoodie" → $42, "snapback" → $22.
-2. Render preset buttons in the price edit area.
-3. Click a preset → updates the price input.
-4. "Custom" shows an inline input for typing a custom price.
-
-### Pre-Export Validation (`internal/validator/validator.go`)
-
-**Overview**: Runs a set of checks on the product data before export. Returns a list of issues.
-
-```go
-package validator
-
-// Issue represents a validation problem found in the product data.
-type Issue struct {
-    Severity string // "error", "warning", "info"
-    Field    string // e.g., "Product.Description", "Variant[2].SKU"
-    Message  string
-}
-
-// ValidateProducts runs all validation rules and returns issues.
-func ValidateProducts(products []model.Product) []Issue
-```
-
-**Validation rules:**
-
-| Rule                          | Severity  | Description                                    |
-| ----------------------------- | --------- | ---------------------------------------------- |
-| Empty product name            | warning   | Products should have a name for the store      |
-| Empty description             | warning   | Products need a description for customers      |
-| SKU collision (same SKU twice) | error     | Godaddy will reject or confuse duplicate SKUs  |
-| Negative price                | error     | Price must be ≥ 0                              |
-| Zero price                    | warning   | Free products may be unintentional              |
-| Price > $500                  | info      | Unusually high price — verify                  |
-| Missing SKU on variant        | warning   | Auto-gen recommended but not required           |
-| HTML tags in description      | info      | Raw HTML tags may not render correctly         |
-| Description > 5000 chars      | warning   | Very long descriptions may be truncated by Godaddy |
-
-**Implementation steps:**
-
-1. Implement each rule as a function `validateX(product *model.Product) []Issue`.
-2. `ValidateProducts()` runs all rules and returns the combined list.
-3. Add `POST /api/products/validate` endpoint that returns issues as JSON.
-
-### Frontend: Validation Bar (`web/components/validation-bar.js`)
-
-**Overview**: A bar that appears when the user navigates to the export view, showing validation results.
-
-```
-┌─────────────────────────────────────────────────┐
-│ ⚠ 3 issues found before export                  │
-│ ● 2 warnings (missing descriptions)             │
-│ ● 1 error (SKU collision on "In Jesus Name Tee")│
-│ [View Details] [Proceed Anyway] [Fix Issues]    │
-└─────────────────────────────────────────────────┘
-```
-
-**Key decisions:**
-
-- Validation runs automatically when the export view is opened.
-- Errors block export (the "Export" button is disabled until errors are resolved).
-- Warnings allow export with a confirmation.
-- "View Details" shows a collapsible list of issues with suggestions.
-
-**Implementation steps:**
-
-1. Fetch `/api/products/validate` when the export view loads.
-2. Display summary bar based on issue counts.
-3. Disable export button if any errors exist.
-4. "View Details" expands to show individual issues.
-5. "Proceed Anyway" requires a confirmation modal for errors.
-
-## Data Model Changes
-
-```go
-// In internal/model/product.go, add:
-
-type Product struct {
-    // ... existing fields ...
-    AIDescription string // Optional: AI-generated description draft (not persisted to CSV)
+export class ImageHandler {
+  async organizeImages(products: Product[]): Promise<OrganizedImage[]>;
 }
 ```
 
-Note: `AIDescription` is not written to CSV — it's a transient editing aid. If the user accepts the AI rewrite, the description is written to `Description` (which IS exported).
+**Key decisions**:
 
-## API Design Additions
+- Image order matters because Godaddy imports often use primary/secondary ordering conventions.
+- Missing image files should generate warnings, not crash the entire export package, unless the product has been marked as requiring them.
+- The handler should stay ignorant of HTTP and UI concerns.
 
-| Method | Path                              | Request Body | Response                        |
-| ------ | --------------------------------- | ------------ | ------------------------------- |
-| `POST` | `/api/products/:id/rewrite-desc`  | `{}`         | `{ "rewritten": "..." }`        |
-| `POST` | `/api/products/validate`          | `{}`         | `{ "issues": [{severity, field, message}] }` |
+**Implementation steps**:
+
+1. Extend `ImageHandler` to record missing-file cases instead of failing on the first one.
+2. Preserve primary-image ordering when staging files.
+3. Normalize destination filenames consistently to avoid collisions.
+4. Keep copy behavior idempotent so reruns do not multiply files.
+
+**Feedback loop**:
+
+- **Playground**: Use `test/model/image-handler.test.ts` with temp directories.
+- **Experiment**: Stage repeated runs with the same images, plus one missing file, and verify stable results.
+- **Check command**: `node --import tsx --test test/model/image-handler.test.ts`
+
+### Image Management and Package UX
+
+**Pattern to follow**: `web/app.js`, `src/server/app.ts`
+
+**Overview**: The local app should let the operator attach/manage images on a product and then trigger a full export package, not just a CSV download.
+
+```ts
+// POST /api/products/:id/images
+// POST /api/export/package
+
+interface ExportPackageResponse {
+  outputDir: string;
+  csvPath: string;
+  imageFiles: string[];
+  warnings: string[];
+}
+```
+
+**Key decisions**:
+
+- Keep image management inside the product editor rather than inventing a separate asset module.
+- Export packaging should return file-system locations and warnings so the operator knows what was produced.
+- The UI should distinguish “package built with warnings” from “package failed.”
+
+**Implementation steps**:
+
+1. Preserve or improve the current image upload flow in `web/app.js`.
+2. Add an export-package action that invokes the bundle builder server-side.
+3. Show warnings for missing images or skipped files in a dialog or status area.
+4. Keep existing validation behavior in front of packaging so unsafe catalogs still cannot export.
+
+**Feedback loop**:
+
+- **Playground**: Start the app with a temp image source directory and a known output directory.
+- **Experiment**: Upload one image, mark it primary, package export, then inspect the output directory and warning list.
+- **Check command**: `node --import tsx --test test/server/image-package.test.ts && npm run dev`
+
+## Data Model
+
+### State Shape
+
+```ts
+export interface ImageRef {
+  fileName: string;
+  altText: string;
+  isPrimary: boolean;
+  sortOrder?: number;
+}
+```
+
+Only add metadata that is required for deterministic packaging or UI ordering.
+
+## API Design
+
+### New Endpoints
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/export/package` | Build the CSV + image export package in the configured output directory. |
+
+### Modified Endpoints
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/products/:id/images` | Return enough metadata for the UI to refresh image state and warnings. |
+| `POST` | `/api/products/export` | Optionally become a thin wrapper over package assembly, or remain CSV-only if both flows are intentionally preserved. |
+
+### Request/Response Examples
+
+```ts
+// POST /api/export/package
+{}
+
+// Response
+{
+  "outputDir": "/Users/tinetti/Projects/restoring-warriors-merch-manager/godaddy-import",
+  "csvPath": "/Users/tinetti/Projects/restoring-warriors-merch-manager/godaddy-import/godaddy-export.csv",
+  "imageFiles": [
+    "prod-1-1.jpg",
+    "prod-1-2.jpg"
+  ],
+  "warnings": []
+}
+```
 
 ## Testing Requirements
 
 ### Unit Tests
 
-| Test File                       | Coverage                            |
-| ------------------------------- | ----------------------------------- |
-| `internal/ai/provider_test.go`  | HTTP request, mock response, error handling |
-| `internal/ai/rewrite_test.go`   | Prompt construction, HTML entity handling |
-| `internal/validator/validator_test.go` | All validation rules, no issues, mixed issues |
+| Test File | Coverage |
+| --- | --- |
+| `test/model/image-handler.test.ts` | Ordered copy behavior, overwrite/idempotence, missing-file handling. |
+| `test/model/export-bundle.test.ts` | End-to-end bundle assembly and warning reporting. |
 
-**Key test cases:**
+**Key test cases**:
 
-- AI provider: successful response returns description
-- AI provider: API key missing returns specific error
-- AI provider: timeout returns context deadline exceeded
-- Rewrite: prompt includes product name and description
-- Rewrite: HTML entities are decoded before sending, encoded after receiving
-- Validator: empty product name → warning
-- Validator: duplicate SKU → error
-- Validator: negative price → error
-- Validator: 0 issues → empty result
-- Validator: 50+ products → performance acceptable (<1s)
+- Packaging creates CSV plus staged images in the expected directory.
+- Missing image files yield warnings but do not necessarily abort packaging.
+- Re-running packaging overwrites or reuses destination files cleanly.
+- Primary image ordering is preserved.
+- Unsupported file formats are skipped or warned consistently.
+
+### Integration Tests
+
+| Test File | Coverage |
+| --- | --- |
+| `test/server/image-package.test.ts` | Upload + package flow via the local app server. |
+
+**Key scenarios**:
+
+- Upload one or more images to a product and build a package successfully.
+- Build a package when an image reference is missing and verify warnings are returned.
+- Attempt package export with a validation-blocked catalog and verify the guard still holds.
 
 ### Manual Testing
 
-- [ ] Set `GODADDY_AI_API_KEY` env var, open product edit, click "AI Rewrite" — verify description is rewritten
-- [ ] Without API key, click "AI Rewrite" — verify button is disabled with helpful message
-- [ ] Accept an AI rewrite — verify the new description is saved and appears in export
-- [ ] Discard an AI rewrite — verify original description is restored
-- [ ] Export products with validation warnings — verify "Proceed Anyway" works
-- [ ] Export products with validation errors — verify export is blocked
+- [ ] Upload multiple images for a product and mark one primary.
+- [ ] Build an export package and inspect the output directory on disk.
+- [ ] Remove or rename one source image and verify packaging returns a warning.
+- [ ] Rebuild the package twice and confirm the layout remains stable.
 
 ## Error Handling
 
-| Error Scenario              | Handling Strategy                                      |
-| --------------------------- | ------------------------------------------------------ |
-| AI API key not set          | Disable AI button, show configuration hint             |
-| AI API rate limited         | Show "Rate limited — try again in a moment" message    |
-| AI API request fails        | Show error, keep original description                  |
-| Validation has errors       | Block export, show issue list                          |
-| Validation has warnings     | Allow export with confirmation                         |
+| Error Scenario | Handling Strategy |
+| --- | --- |
+| Source image file missing | Record a warning in the bundle result; continue packaging other assets. |
+| Output directory cannot be created | Return a hard error and do not claim package success. |
+| Unsupported image format | Skip and warn; do not attempt lossy conversion in this phase. |
+| Package export requested while validation is blocked | Return the same blocked export structure used in earlier phases. |
 
 ## Failure Modes
 
-| Component       | Failure Mode              | Trigger                    | Impact                     | Mitigation                         |
-| --------------- | ------------------------- | -------------------------- | -------------------------- | ---------------------------------- |
-| AI Provider     | API returns non-JSON      | Provider outage/breaking change | Parse error, request fails | Catch and show "AI service error"  |
-| AI Provider     | Extremely long response   | AI goes off-track          | UI overflow, slow render   | Truncate to 5000 chars in UI       |
-| AI Provider     | Stale pricing in prompt   | AI references old prices   | Misleading description     | Don't include price in prompt      |
-| Validator       | Missed Godaddy validation | Godaddy rejects export     | User frustration           | Update rules based on real failures|
-| Validator       | False positive on HTML    | Legitimate HTML in desc    | Unnecessary warning        | Only warn on raw/unmatched tags    |
+| Component | Failure Mode | Trigger | Impact | Mitigation |
+| --- | --- | --- | --- | --- |
+| Bundle builder | Partial package output | CSV writes but image staging fails midway | Operator imports incomplete package unknowingly | Return warnings/errors plus explicit output paths; keep staging deterministic |
+| Image registry | Stale references | User moves/deletes a local image after upload | Export package is incomplete | Surface missing-image warnings at package time |
+| Output layout | File collision | Two products normalize to clashing image filenames | One image overwrites another | Prefix filenames with product identity and sequence |
+| UI package status | False success signal | Server packages with warnings but UI only shows success | Operator misses incomplete asset state | Show warnings prominently and separately from success state |
 
 ## Validation Commands
 
 ```bash
-# Test AI provider
-go test ./internal/ai/... -v
+# Type checking
+npm run typecheck
 
-# Test validator
-go test ./internal/validator/... -v
+# Linting
+npm run lint
+
+# Scoped Phase 4 tests
+node --import tsx --test test/model/image-handler.test.ts test/model/export-bundle.test.ts test/server/image-package.test.ts
 
 # Full test suite
-go test ./...
+npm test
+
+# Run the local app
+npm run dev
 ```
 
 ## Rollout Considerations
 
-- AI feature requires an API key — document setup in README: `export GODADDY_AI_API_KEY=sk-...`
-- Default model `gpt-4o-mini` is cheap and fast, but if quality is unsatisfactory, users can set `GODADDY_AI_MODEL=gpt-4o` or change `BaseURL` to a different provider.
-- Consider adding a `--ai-temperature` flag for future control (0.7 default is fine).
+- Preserve the simple local-folder mental model; do not add cloud storage or remote asset sync.
+- Keep CSV-only export available if packaging needs to be phased in incrementally.
+- If real-world Godaddy imports reveal a stricter asset naming/layout rule, centralize that change in `export-bundle.ts` rather than scattering it across UI/server code.
 
 ## Open Items
 
-- [ ] Which LLM provider to recommend? (OpenAI is the default, but alternatives like Anthropic Claude or open-source models via Ollama might be relevant)
-- [ ] Should AI rewrite also suggest a new product name? (Currently only rewrites description)
-- [ ] Rate limiting: should we limit AI calls to N per minute to control costs? (Probably not for a single-user tool, but worth considering)
+- [ ] Confirm the exact Godaddy image-packaging expectations with a real import test if they differ from the current flat staged-file approach.
+- [ ] Decide whether packaging should optionally emit a zip archive later, or stay as a plain local directory.
 
 ---
 

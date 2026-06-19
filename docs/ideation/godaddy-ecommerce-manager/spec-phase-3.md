@@ -1,53 +1,44 @@
 # Implementation Spec: Godaddy Ecommerce Manager - Phase 3
 
-**Contract**: ./docs/ideation/godaddy-ecommerce-manager/contract.html
-**Date**: 2026-06-17
-**Estimated Effort**: M
-
-**Prerequisites**: Phase 1 (Data Layer & CSV I/O), Phase 2 (Web App UI)
+**Contract**: `./contract.md`
+**Estimated Effort**: L
 
 ## Technical Approach
 
-Phase 3 adds two interconnected features: (1) auto-generated SKU logic from variant attributes, and (2) image file management for Godaddy import. Both features touch the data model (new fields/methods), the CSV writer (new columns), and the web UI (SKU display and image management UI).
+Phase 3 solves the catalog-gap workflow that the interview surfaced: existing products often have incomplete option matrices, and filling those gaps manually is exactly the kind of tedious, error-prone work this tool should remove. The implementation should stay constrained to existing products. It is not full authoring yet; it is completion of an already imported product.
 
-**Key technical decisions:**
+The clean model for this is a product-level option schema plus a deterministic matrix generator. The option schema names each editable dimension and its allowed values; the generator computes the cartesian product, compares it with the existing variant set, and returns the missing combinations. Existing variants remain untouched unless the operator explicitly chooses to generate the missing rows.
 
-- **SKU format**: Replace Godaddy's cryptic SKUs (e.g., `"N-JSS-NM-T---BG-LTTR-BLCK-SMLL"`) with readable, consistent SKUs derived from product name + variant attributes. Format: `{FAMILY}-{PRODUCT-SHORT}-{COLOR}-{SIZE}` (configurable).
-- **SKU generation is opt-in per product**: Users see the current Godaddy SKU and can click "Regenerate" to apply the auto-generated format. Preserves existing SKUs for products that already have good ones.
-- **Image directory structure**: Godaddy's importer expects images in a specific subdirectory layout. We'll create a `godaddy-import/` output directory alongside the exported CSV, with images organized by product ID. The exact structure is inferred from the export and configurable.
-- **Images are referenced by filename** in the CSV — the tool manages the copy operation to the import directory.
+SKU handling must follow the consistency rule established in the contract. Existing SKUs are preserved exactly. Only newly generated variants receive generated SKUs. The generator should first try to infer the sibling SKU pattern from existing variants; if that inference is unreliable, it should fall back to a simple generated SKU format that is stable and readable. This phase should not introduce hidden SKU rewrites of old rows.
 
 ## Feedback Strategy
 
-**Inner-loop command**: `go test ./internal/model/... -v -run TestSKU`
+**Inner-loop command**: `node --import tsx --test test/model/variant-completion.test.ts test/model/sku-inference.test.ts`
 
-**Playground**: Run the CLI export with a test product set, inspect the generated SKUs and image directory. Also test in the web UI by editing variants and seeing SKUs regenerate.
+**Playground**: Scoped model tests first, then the localhost app for preview/apply flows.
 
-**Why this approach**: SKU generation is pure logic — unit tests give instant feedback. Image directory structure is verified by inspecting the output.
+**Why this approach**: The core logic is pure combination and inference code, so tight model tests should drive most of the work before the UI wiring begins.
 
 ## File Changes
 
 ### New Files
 
-| File Path                                                    | Purpose                                    |
-| ------------------------------------------------------------ | ------------------------------------------ |
-| `internal/model/sku.go`                                      | SKU generation logic from variant attributes |
-| `internal/model/sku_test.go`                                 | Tests for SKU generation                   |
-| `internal/model/image_handler.go`                            | Image copy/organization for Godaddy import |
-| `internal/model/image_handler_test.go`                       | Tests for image handling                   |
-| `web/components/image-uploader.js`                           | Image upload/drag-drop component           |
-| `internal/server/image_handler.go`                           | Image upload HTTP endpoint                 |
+| File Path | Purpose |
+| --- | --- |
+| `src/model/variant-matrix.ts` | Computes desired option combinations and identifies missing variants for a product. |
+| `src/model/sku-inference.ts` | Infers new-variant SKU patterns from sibling variants and falls back when inference is weak. |
+| `test/model/variant-completion.test.ts` | Covers option schema handling and missing-combination generation. |
+| `test/model/sku-inference.test.ts` | Covers pattern inference, ambiguity, and fallback SKU generation. |
 
 ### Modified Files
 
-| File Path                          | Changes                                    |
-| ---------------------------------- | ------------------------------------------ |
-| `internal/model/product.go`        | Add `SKU` field to Variant; add `RegenerateSKUs()` method to Product |
-| `internal/csv/writer.go`           | Add SKU column (already exists, but now auto-populated) |
-| `internal/server/handlers.go`      | Add `POST /api/products/:id/regenerate-sku` endpoint |
-| `cmd/godaddy-manager/main.go`      | Add `--output-dir` flag for image export   |
-| `web/app.js`                       | Add route for image management view        |
-| `web/styles.css`                   | Add styles for SKU display and image grid  |
+| File Path | Changes |
+| --- | --- |
+| `src/model/types.ts` | Add product-level option schema fields needed to define allowed values explicitly. |
+| `src/store.ts` | Support replacing one product after generated variants are applied. |
+| `src/server/app.ts` | Add endpoints to preview and apply missing-variant generation. |
+| `web/app.js` | Add option-schema editing, missing-combination preview, and apply action. |
+| `src/model/sku.ts` | Reuse existing sanitization/default-format helpers for fallback generation. |
 
 ### Deleted Files
 
@@ -55,301 +46,257 @@ _None._
 
 ## Implementation Details
 
-### SKU Generation (`internal/model/sku.go`)
+### Product Option Schema and Matrix Generation
 
-**Overview**: Converts variant attributes into readable, consistent SKUs based on a configurable template.
+**Pattern to follow**: `src/model/types.ts`, `src/model/sku.ts`
 
-```go
-package model
+**Overview**: Add explicit product-level option metadata so the app can tell the difference between “existing variants” and “desired variant space.”
 
-// SKUConfig defines how SKUs are generated.
-type SKUConfig struct {
-    Template string          // e.g., "{Family}-{Product}-{Color}-{Size}"
-    Separator string          // Default: "-"
-    MaxLength int             // Default: 50 characters
-    Abbreviations map[string]string // "Small" → "SM", "Black" → "BLK"
+```ts
+export interface ProductOptionSchema {
+  option1Name: string;
+  option1Values: string[];
+  option2Name?: string;
+  option2Values?: string[];
 }
 
-// DefaultSKUConfig returns a sensible default configuration.
-func DefaultSKUConfig() *SKUConfig
-
-// GenerateSKU builds a SKU from a Product and Variant using the config.
-func (c *SKUConfig) GenerateSKU(product *Product, variant *Variant) string
-
-// RegenerateAllSKUs updates all variants' SKUs on a product.
-func (p *Product) RegenerateAllSKUs(config *SKUConfig)
-```
-
-**SKU Template variables:**
-
-| Variable       | Source                        | Example              |
-| -------------- | ----------------------------- | -------------------- |
-| `{Family}`     | Product's ProductFamily       | INJES, RESTO, SNAPB  |
-| `{Product}`    | Product name (sanitized)      | INJES-TEE, WR-HOODIE |
-| `{Color}`      | Option1Value (if Color)       | BLACK, WHITE, NAVY   |
-| `{Size}`       | Option2Value (if Size)        | S, M, L, XL          |
-| `{Style}`      | Option1Value (if Style)       | BROOKLYN, CLASSIC    |
-
-**Sanitization rules:**
-
-- Convert to UPPERCASE.
-- Replace spaces, special chars with the separator.
-- Collapse multiple separators.
-- Trim to `MaxLength`.
-
-**Example output:**
-
-| Input                                      | Generated SKU                    |
-| ------------------------------------------ | -------------------------------- |
-| "In Jesus Name" T-Shirt, Black, Small      | `INJES-INJES-TEE-BLACK-S`        |
-| "Restoring Warriors" Hoodie, Navy, Medium  | `RESTO-WR-HOODIE-NAVY-M`         |
-| "Snapback" Hat, Brooklyn                   | `SNAPB-SNAP-HAT-BROOKLYN`        |
-
-**Key decisions:**
-
-- Template-driven — not hardcoded. The user can customize if they want a different format later.
-- SKU generation is a separate function from the data model — it can be called from CLI, API, or tests independently.
-- Default template: `{Family}-{Product}-{Color}{Size}` (skip Size for products with only one variant dimension).
-
-**Implementation steps:**
-
-1. Define `SKUConfig` struct with template, separator, max length, abbreviations map.
-2. Implement `GenerateSKU()` — parse template, substitute variables, sanitize.
-3. Implement `RegenerateAllSKUs()` — iterate product's variants, call `GenerateSKU` for each.
-4. Add `SKU` field to `model.Variant` struct.
-5. Write unit tests with sample products and expected SKUs.
-
-**Feedback loop:**
-
-- **Playground**: `go test ./internal/model/... -v -run TestSKU`
-- **Experiment**: Test SKU generation for all 3 product families, test with 1 and 2 variant dimensions, test edge cases (long names, special chars).
-- **Check command**: `go test ./internal/model/... -v -run TestSKU -count=1`
-
-### SKU Regenerate Endpoint (`internal/server/handlers.go`)
-
-**Overview**: HTTP endpoint to trigger SKU regeneration for a product.
-
-```
-POST /api/products/:id/regenerate-sku
-Response: { "skus_regenerated": N }
-```
-
-**Implementation steps:**
-
-1. Parse `:id` from URL.
-2. Load product from store.
-3. Call `product.RegenerateAllSKUs(config)`.
-4. Save product back to store.
-5. Return count of variants whose SKUs were updated.
-
-### Image Handler (`internal/model/image_handler.go`)
-
-**Overview**: Manages copying and organizing image files into the directory structure Godaddy's importer expects.
-
-```go
-package model
-
-// ImageHandler manages image file operations for Godaddy import.
-type ImageHandler struct {
-    SourceDir string // Where images are stored (user-managed)
-    OutputDir string // Where images are copied for import
+export interface MissingVariantPlan {
+  existingKeys: string[];
+  missing: Array<{
+    option1Value: string;
+    option2Value: string;
+  }>;
 }
 
-// NewImageHandler creates a handler for the given source and output directories.
-func NewImageHandler(sourceDir, outputDir string) *ImageHandler
-
-// OrganizeImages copies product images to the output directory
-// in the structure Godaddy's importer expects.
-func (h *ImageHandler) OrganizeImages(products []Product) error
-
-// ListProductImages returns the image files associated with a product.
-func (h *ImageHandler) ListProductImages(productID string) []ImageFileInfo
-
-// ImportImage copies a single image file and returns the destination path.
-func (h *ImageHandler) ImportImage(productID string, sourcePath string) (destPath string, err error)
+export function planMissingVariants(product: Product): MissingVariantPlan;
+export function generateMissingVariants(product: Product): Product;
 ```
 
-**Image directory structure (inferred, needs verification):**
+**Key decisions**:
 
-Godaddy's CSV importer expects images in a directory alongside the CSV file. The exact structure is typically:
+- The product owns the allowed option sets; they are not guessed fresh on every render.
+- Existing variants seed the initial schema on import, but the operator can edit the allowed values explicitly.
+- Matrix generation is deterministic and side-effect free until the operator chooses to apply it.
 
-```
-godaddy-import/
-├── products/
-│   ├── PROD-001/
-│   │   ├── main.jpg
-│   │   ├── angle-1.jpg
-│   │   └── detail.jpg
-│   ├── PROD-002/
-│   │   └── main.jpg
-└── export.csv
-```
+**Implementation steps**:
 
-**Alternative structure** (flat with prefixed filenames):
+1. Extend `Product` with an optional `optionSchema` field.
+2. On CSV import, derive an initial schema from existing variant rows.
+3. Implement `planMissingVariants(product)` to compute the missing cartesian-product combinations.
+4. Implement `generateMissingVariants(product)` to create new variant records only for the missing combinations.
 
-```
-godaddy-import/
-├── PROD-001-main.jpg
-├── PROD-001-angle-1.jpg
-├── PROD-002-main.jpg
-└── export.csv
-```
+**Feedback loop**:
 
-**Key decisions:**
+- **Playground**: Create `test/model/variant-completion.test.ts` with one product that is missing a known combination before implementation.
+- **Experiment**: Test one-dimension and two-dimension products, plus an empty option value edge case.
+- **Check command**: `node --import tsx --test test/model/variant-completion.test.ts`
 
-- The structure is **configurable** — the tool needs a way to let the user specify which layout Godaddy expects. Start with the flat naming convention (simpler, more common for CSV-based importers).
-- Image filenames follow `{ProductID}-{sequence}.{ext}` format.
-- Supported formats: `.jpg`, `.jpeg`, `.png`, `.webp`.
-- Images are **copied** (not moved) — the source remains untouched.
-- If the output directory already exists, existing files are **overwritten** (idempotent).
+### SKU Inference for New Variants
 
-**Implementation steps:**
+**Pattern to follow**: `src/model/sku.ts`
 
-1. Define `ImageHandler` with source and output directory paths.
-2. Implement `OrganizeImages()` — scan product Images references, copy each to output dir with the naming convention.
-3. Implement `ImportImage()` — single file copy with naming.
-4. Implement `ListProductImages()` — scan source directory, match to product's image references.
-5. Handle errors: source file doesn't exist (log warning, skip), destination directory can't be created (return error), unsupported format (log warning, skip).
-6. Write tests with temp directories.
+**Overview**: Infer the SKU style of sibling variants so newly generated combinations fit existing catalog conventions whenever possible.
 
-### Image Upload Endpoint (`internal/server/image_handler.go`)
-
-**Overview**: HTTP endpoint for uploading images from the web UI.
-
-```
-POST /api/products/:id/images
-Content-Type: multipart/form-data
-Body: files[] (one or more image files)
-Response: { "uploaded": ["filename1.jpg", "filename2.jpg"] }
-```
-
-**Implementation steps:**
-
-1. Accept multipart form with `files[]` field.
-2. Validate each file (extension, size ≤ 10MB).
-3. Copy to source image directory via `ImageHandler.ImportImage()`.
-4. Update the product's `Images` slice with the new references.
-5. Return list of uploaded filenames.
-
-### Frontend: Image Management (`web/components/image-uploader.js`)
-
-**Overview**: Image management UI within the product edit view.
-
-```
-┌─────────────────────────────────────┐
-│ ── Product Images ─────────────────│
-│  ┌──────┐  ┌──────┐  ┌──────┐     │
-│  │ main │  │  2   │  │  3   │  [+]│
-│  │ .jpg │  │ .jpg │  │ .jpg │     │
-│  └──────┘  └──────┘  └──────┘     │
-│                                     │
-│ Primary: [● main.jpg] [○ 2.jpg]   │
-│ Set as primary                    │
-└─────────────────────────────────────┘
-```
-
-**Key decisions:**
-
-- Images are managed within the product edit view, not a separate page.
-- Drag-and-drop or file picker to upload.
-- Thumbnail preview (client-side, using FileReader API).
-- Click to set as primary image.
-- Click [X] to remove from product (doesn't delete the file).
-
-**Implementation steps:**
-
-1. Build an image grid component with thumbnails.
-2. Add a `[+]` button that opens a file picker.
-3. On upload, send files to `/api/products/:id/images`.
-4. On success, refresh the image grid.
-5. Click a thumbnail to set it as primary.
-
-## Data Model Changes
-
-```go
-// In internal/model/product.go, add:
-
-type Variant struct {
-    // ... existing fields ...
-    SKU string // NEW: auto-generated SKU
+```ts
+export interface InferredSkuStrategy {
+  kind: 'inferred' | 'fallback';
+  generate(option1Value: string, option2Value: string): string;
 }
 
-func (p *Product) RegenerateAllSKUs(config *SKUConfig)
+export function inferSkuStrategy(product: Product): InferredSkuStrategy;
+export function assignGeneratedVariantSkus(product: Product): Product;
+```
+
+**Key decisions**:
+
+- Existing SKUs are never rewritten in this phase.
+- Inference should be pragmatic, not magical: if the pattern cannot be recognized confidently, fall back to a stable generated format.
+- Fallback should reuse the existing sanitized family/name/option token logic from `src/model/sku.ts` to avoid two incompatible generation systems.
+
+**Implementation steps**:
+
+1. Inspect sibling variants and detect whether option values map consistently into SKU tokens.
+2. If a pattern exists, construct an inference strategy that fills only the missing combinations.
+3. If not, use the default generated SKU format for new variants only.
+4. Ensure collision handling appends a numeric suffix rather than overwriting existing identity.
+
+**Feedback loop**:
+
+- **Playground**: Create `test/model/sku-inference.test.ts` with one clean-pattern product and one messy-pattern product first.
+- **Experiment**: Verify a product with consistent size/color tokens uses inferred SKUs; verify inconsistent legacy SKUs fall back gracefully.
+- **Check command**: `node --import tsx --test test/model/sku-inference.test.ts`
+
+### Preview/Apply Workflow in the Local App
+
+**Pattern to follow**: `src/server/app.ts`, `web/app.js`
+
+**Overview**: The operator needs to see the missing combinations before they are added. Preview first, apply second.
+
+```ts
+// POST /api/products/:id/variant-plan
+// Response: MissingVariantPlan
+
+// POST /api/products/:id/generate-missing-variants
+// Response: { created: number, product: Product }
+```
+
+**Key decisions**:
+
+- Preview and apply are separate endpoints. Generation should not happen implicitly while editing schema values.
+- The UI should show the list of missing combinations before create, not just a count.
+- If fallback SKUs will be used, say so in the preview result so the operator is not surprised.
+
+**Implementation steps**:
+
+1. Add server endpoints for previewing and applying missing variants.
+2. Add an option-schema editor to the product panel in `web/app.js`.
+3. Render missing combinations in a preview list or dialog.
+4. Apply generated variants, then refresh the editor from the updated product payload.
+
+**Feedback loop**:
+
+- **Playground**: Start the dev server and load a product with an incomplete option matrix.
+- **Experiment**: Define `Color=[Red,Green,Blue]`, `Size=[S,M,L]` on a product missing two combinations; verify preview count and created variants match.
+- **Check command**: `node --import tsx --test test/model/variant-completion.test.ts test/model/sku-inference.test.ts && npm run dev`
+
+## Data Model
+
+### State Shape
+
+```ts
+export interface ProductOptionSchema {
+  option1Name: string;
+  option1Values: string[];
+  option2Name?: string;
+  option2Values?: string[];
+}
+
+export interface Product {
+  // existing fields...
+  optionSchema?: ProductOptionSchema;
+}
+```
+
+This schema belongs on the product because missing-combination generation is defined at the product level, not the variant level.
+
+## API Design
+
+### New Endpoints
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/products/:id/variant-plan` | Return the product's current missing-combination plan. |
+| `POST` | `/api/products/:id/generate-missing-variants` | Create and persist missing variants for that product. |
+
+### Request/Response Examples
+
+```ts
+// POST /api/products/prod-1/variant-plan
+{
+  "optionSchema": {
+    "option1Name": "Color",
+    "option1Values": ["Red", "Green", "Blue"],
+    "option2Name": "Size",
+    "option2Values": ["S", "M", "L"]
+  }
+}
+
+// Response
+{
+  "existingKeys": ["Red|S", "Red|M", "Blue|S"],
+  "missing": [
+    { "option1Value": "Green", "option2Value": "S" },
+    { "option1Value": "Green", "option2Value": "M" }
+  ],
+  "skuMode": "inferred"
+}
 ```
 
 ## Testing Requirements
 
 ### Unit Tests
 
-| Test File                          | Coverage                          |
-| ---------------------------------- | --------------------------------- |
-| `internal/model/sku_test.go`       | All template variables, sanitization, abbreviations |
-| `internal/model/image_handler_test.go` | Copy, overwrite, missing source, unsupported format |
-| `internal/server/image_handler_test.go` | Upload endpoint happy path, invalid files |
+| Test File | Coverage |
+| --- | --- |
+| `test/model/variant-completion.test.ts` | Missing-combination detection and generation for one- and two-dimension products. |
+| `test/model/sku-inference.test.ts` | SKU strategy inference, collision handling, fallback formatting. |
 
-**Key test cases:**
+**Key test cases**:
 
-- SKU: template with all variables → correct SKU
-- SKU: template with one variant dimension (no Size) → correct SKU
-- SKU: product name with special characters → sanitized SKU
-- SKU: SKU exceeds max length → truncated correctly
-- SKU: abbreviation map applied correctly
-- Image: copy file from source to output dir
-- Image: overwrite existing file in output dir
-- Image: source file doesn't exist → skip, log warning
-- Image: unsupported file format → skip, log warning
-- Image: output directory doesn't exist → create it
+- Existing product missing one combination gets exactly one new variant.
+- One-dimension products do not invent a second dimension.
+- Existing SKUs remain unchanged after generation.
+- Inferred SKU strategy works when sibling SKUs clearly encode option values.
+- Fallback strategy activates when legacy SKUs are inconsistent.
+- Generated SKUs avoid collisions with existing ones.
+
+### Integration Tests
+
+| Test File | Coverage |
+| --- | --- |
+| `test/server/app.test.ts` | Preview/apply endpoints integrated with the existing app server. |
+
+**Key scenarios**:
+
+- Preview missing combinations for an imported product.
+- Apply missing combinations and verify new variants appear in the returned product.
+- Export after generation still passes validation.
 
 ### Manual Testing
 
-- [ ] Open product edit in web UI, click "Regenerate SKUs" — verify SKUs are readable and consistent
-- [ ] Upload an image via the web UI — verify it appears in the image grid
-- [ ] Export CSV — verify images are copied to the output directory
-- [ ] Verify image directory structure matches Godaddy's expectations (need to confirm with friend)
+- [ ] Open a product with missing combinations in the local app.
+- [ ] Edit the allowed option values and preview the missing matrix.
+- [ ] Apply generation and verify only the missing variants are created.
+- [ ] Confirm existing SKUs are unchanged.
+- [ ] Confirm newly created variants receive inferred or fallback SKUs as expected.
 
 ## Error Handling
 
-| Error Scenario              | Handling Strategy                                      |
-| --------------------------- | ------------------------------------------------------ |
-| SKU config has invalid template | Return 400, show template error in UI                |
-| Image file too large        | Reject upload, show "Max 10MB per file" message        |
-| Unsupported image format    | Log warning, skip file, continue processing            |
-| Output directory can't be created | Return 500, show "Cannot create output directory"  |
-| Source image file missing   | Log warning, skip file, include missing count in response |
+| Error Scenario | Handling Strategy |
+| --- | --- |
+| Option schema has duplicate values | Normalize/dedupe values before planning and show a warning if needed. |
+| Existing variants conflict with schema labels | Show preview with unresolved combinations; do not silently delete or rewrite existing rows. |
+| SKU inference is ambiguous | Use fallback generation and report that mode in the preview/apply response. |
+| Matrix explosion | Guard against unreasonable combination counts and require explicit confirmation or reject over a threshold. |
 
 ## Failure Modes
 
-| Component     | Failure Mode              | Trigger                      | Impact                      | Mitigation                         |
-| ------------- | ------------------------- | ---------------------------- | --------------------------- | ---------------------------------- |
-| SKU Generator | Template references unknown variable | `{UnknownVar}` in template | Empty SKU or panics         | Validate template at parse time    |
-| SKU Generator | Two variants get same SKU | Similar attribute combos     | Godaddy import conflict     | Append numeric suffix if collision |
-| Image Handler | Source image deleted before export | User moves file elsewhere | Skipped image, no alt text  | Log warning, continue              |
-| Image Handler | Disk full during copy     | Insufficient disk space      | Partial image directory     | Check disk space before batch copy |
-| Image Handler | Duplicate filenames in output | Multiple images named same | One overwrites the other    | Prefix with product ID (already)   |
+| Component | Failure Mode | Trigger | Impact | Mitigation |
+| --- | --- | --- | --- | --- |
+| Matrix planner | Combination explosion | Operator enters very large option value sets | The UI becomes slow and accidental bulk creation occurs | Cap preview size and require explicit confirmation beyond a threshold |
+| SKU inference | False pattern detection | Legacy SKUs look similar but do not truly encode options | New SKUs mimic the wrong pattern | Keep inference conservative and fall back early |
+| Generator | Duplicate logical variants | Existing variants differ only by casing/spacing in option values | New rows duplicate real catalog states | Normalize comparison keys before planning |
+| UI preview | Hidden fallback mode | Operator assumes inferred SKUs but fallback was used | Surprise SKU results | Surface `skuMode` clearly in preview and result messages |
 
 ## Validation Commands
 
 ```bash
-# Test SKU generation
-go test ./internal/model/... -v -run TestSKU
+# Type checking
+npm run typecheck
 
-# Test image handling
-go test ./internal/model/... -v -run TestImage
+# Linting
+npm run lint
+
+# Scoped Phase 3 tests
+node --import tsx --test test/model/variant-completion.test.ts test/model/sku-inference.test.ts
 
 # Full test suite
-go test ./...
+npm test
+
+# Run the local app
+npm run dev
 ```
 
 ## Rollout Considerations
 
-- SKU regeneration is a destructive operation (replaces existing SKUs) — add confirmation in the UI.
-- Image directory output path should be configurable via CLI flag (`--output-dir`) or default to `godaddy-import/` next to the CSV.
+- This phase changes editing power materially, so keep preview/apply separate to avoid accidental bulk mutation.
+- Do not add automatic background generation. The operator should remain in control of when missing variants are created.
+- If matrix generation thresholds are added, make them configurable in code only if a real need appears.
 
 ## Open Items
 
-- [ ] **CRITICAL**: Confirm Godaddy's actual image directory structure from the friend or by testing. The flat vs. nested layout decision depends on this.
-- [ ] Should there be a "preview" mode that shows what SKUs would be generated without actually changing them?
-- [ ] Image compression/resizing? (Godaddy has size limits — should we auto-compress?)
+- [ ] Decide the exact threshold at which the app should warn or refuse a large generated matrix.
+- [ ] Decide whether the preview should show full proposed SKUs inline or only after apply.
 
 ---
 
