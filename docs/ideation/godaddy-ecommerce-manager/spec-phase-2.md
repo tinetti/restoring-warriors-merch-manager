@@ -1,78 +1,42 @@
 # Implementation Spec: Godaddy Ecommerce Manager - Phase 2
 
-**Contract**: ./docs/ideation/godaddy-ecommerce-manager/contract.html
-**Date**: 2026-06-17
-**Estimated Effort**: L
-
-**Prerequisite**: Phase 1 — Data Layer & CSV I/O must be complete.
+**Contract**: `./contract.md`
+**Estimated Effort**: M
 
 ## Technical Approach
 
-Phase 2 builds the local web application — a single-page app served by the Go backend on localhost. The user browses products, views/edit variants, and exports a corrected CSV. The frontend is vanilla HTML/CSS/JS (no framework), communicated with the Go backend via JSON over HTTP.
+Phase 2 turns the Phase 1 model into the operator's day-to-day editing surface. The app remains a localhost web application served by the existing Node HTTP server. The current `src/server/app.ts` and `web/app.js` already prove the basic shape works, so this phase should harden that flow instead of introducing a framework or a hosted architecture.
 
-**Key technical decisions:**
+The product boundary for this phase is deliberately narrow: edit an existing catalog safely. That means importing a CSV or project file, browsing products, editing existing product and variant fields, saving a project file, running validation, and exporting only when the catalog is safe. It does not yet mean full authoring of net-new products or automated variant completion. Those come later.
 
-- **Vanilla HTML/CSS/JS**: No React, no Vue. The app is simple enough that a framework adds unnecessary complexity and build steps. A single `index.html` with inline or module-scoped JS.
-- **Go backend as API server**: Serves the static frontend, provides REST endpoints for CRUD on products, and the CSV import/export endpoints from Phase 1.
-- **Single-page navigation**: Hash-based routing (`#/products`, `#/products/:id`, `#/products/:id/edit`) — no server-side routing needed.
-- **In-memory state**: The frontend holds product data in memory. Changes are tracked and synced to the backend on save/export.
-
-**Architecture:**
-
-```
-Browser (localhost:8080)
-  └── index.html + app.js + styles.css (served by Go static handler)
-  └── API calls → Go backend (JSON endpoints)
-
-Go Backend
-  ├── Static file server (frontend)
-  ├── GET  /api/products        — list all products
-  ├── GET  /api/products/:id    — get single product
-  ├── PUT  /api/products/:id    — update product
-  ├── POST /api/products/:id/import-csv  — load a Godaddy CSV
-  ├── POST /api/products/export-csv      — export to Godaddy CSV
-  └── GET  /health              — health check
-```
-
-**Backend package additions:**
-
-```
-internal/server/           # HTTP server with API handlers
-internal/server/middleware/ # Auth (future), logging
-```
+Because the browser is running locally, the cleanest project-file persistence flow is download/upload of the versioned project document rather than trying to browse arbitrary local paths from the backend. The server should expose project-document endpoints, and the frontend should make save/load obvious and explicit. The UI should also make export safety visible so the operator never mistakes a warning-heavy draft for a ready-to-import catalog.
 
 ## Feedback Strategy
 
-**Inner-loop command**: `open http://localhost:8080` and interact with the browser
+**Inner-loop command**: `node --import tsx --test test/server/app.test.ts test/server/project-file-api.test.ts`
 
-**Playground**: Go dev server (`go run cmd/godaddy-manager/main.go server`) serving the frontend. Make a change, refresh the browser.
+**Playground**: Dev server via `npm run dev` plus the browser at `http://127.0.0.1:8080`.
 
-**Why this approach**: The frontend is a SPA — the fastest feedback is seeing the actual rendered UI. API layer changes are verified with `curl` or the browser devtools.
+**Why this approach**: This phase mixes API and UI work, so fast server tests plus a live localhost UI give the tightest loop.
 
 ## File Changes
 
 ### New Files
 
-| File Path                                           | Purpose                                    |
-| --------------------------------------------------- | ------------------------------------------ |
-| `internal/server/server.go`                         | Go HTTP server setup, routes, handlers     |
-| `internal/server/handlers.go`                       | API endpoint handlers (list, get, update)  |
-| `internal/server/csv_handler.go`                    | CSV import/export HTTP handlers            |
-| `web/index.html`                                    | Main SPA HTML page                         |
-| `web/app.js`                                        | SPA application logic (routing, state)     |
-| `web/styles.css`                                    | App styles (CSS variables, layout)         |
-| `web/components/product-list.js`                    | Product list view component                |
-| `web/components/product-detail.js`                  | Product detail/edit view component         |
-| `web/components/variant-row.js`                     | Variant row editor inline component        |
-| `web/utils/api.js`                                  | Fetch wrapper for API calls                |
-| `web/utils/format.js`                               | Helpers (price formatting, SKU display)    |
+| File Path | Purpose |
+| --- | --- |
+| `test/server/project-file-api.test.ts` | Covers save/load project endpoints and export blocking behavior. |
+| `test/server/export-guard.test.ts` | Verifies export refuses blocked catalogs and returns validation context. |
 
 ### Modified Files
 
-| File Path                          | Changes                                    |
-| ---------------------------------- | ------------------------------------------ |
-| `cmd/godaddy-manager/main.go`      | Add `server` subcommand; wire up HTTP server |
-| `internal/model/product.go`        | Add JSON struct tags for API serialization |
+| File Path | Changes |
+| --- | --- |
+| `src/server/app.ts` | Add project-file save/load endpoints and enforce validation before export. |
+| `src/store.ts` | Support replacing full project state cleanly while preserving deep-copy safety. |
+| `web/index.html` | Add explicit project save/load controls and clearer validation/export affordances. |
+| `web/app.js` | Implement project-file actions, export blocking UX, and a cleaner existing-catalog edit flow. |
+| `src/index.ts` | Wire any new app options or server startup defaults needed by the revised UI flow. |
 
 ### Deleted Files
 
@@ -80,309 +44,250 @@ _None._
 
 ## Implementation Details
 
-### HTTP Server (`internal/server/server.go`)
+### Project File API
 
-**Overview**: Sets up a Go HTTP server that serves the static frontend and exposes JSON API endpoints.
+**Pattern to follow**: `src/server/app.ts` import/export handlers
 
-```go
-package server
+**Overview**: Expose the Phase 1 project-document format over HTTP so the local browser can download and load saved work between sessions.
 
-type Server struct {
-    port int
-    store *model.ProductStore  // In-memory product store (shared with CSV layer)
+```ts
+// POST /api/project/load
+// multipart/form-data: file=<project.json>
+
+// POST /api/project/download
+// response: application/json attachment
+
+interface LoadProjectResponse {
+  imported: number;
 }
 
-func New(port int, store *model.ProductStore) *Server
-func (s *Server) Start() error
-func (s *Server) RegisterRoutes(mux *http.ServeMux)
-```
-
-**Key decisions:**
-
-- Default port 8080, configurable via `--port` flag.
-- Static files served from `web/` directory relative to the binary's working directory.
-- CORS not needed (same origin), but add basic headers (`Content-Type: application/json`).
-
-**Implementation steps:**
-
-1. Create `New()` constructor accepting port and product store.
-2. Set up `http.ServeMux` with routes.
-3. Register static file handler for `web/` directory.
-4. Register API routes under `/api/`.
-5. Add `server` subcommand to CLI that calls `server.Start()`.
-
-### API Handlers (`internal/server/handlers.go`)
-
-**Overview**: JSON API endpoints for product CRUD.
-
-| Method | Path                     | Handler                | Description                    |
-| ------ | ------------------------ | ---------------------- | ------------------------------ |
-| `GET`  | `/api/products`          | `HandleListProducts`   | Return all products as JSON    |
-| `GET`  | `/api/products/:id`      | `HandleGetProduct`     | Return a single product        |
-| `PUT`  | `/api/products/:id`      | `HandleUpdateProduct`  | Update a product and variants  |
-| `POST` | `/api/products/import`   | `HandleImportCSV`      | Upload and parse a CSV file    |
-| `POST` | `/api/products/export`   | `HandleExportCSV`      | Download a CSV file            |
-
-**Key decisions:**
-
-- `PUT /api/products/:id` accepts the full product object (not a patch). Simpler to implement, avoids partial-update complexity.
-- Import endpoint accepts `multipart/form-data` for file upload.
-- Export endpoint returns `Content-Type: text/csv` with `Content-Disposition: attachment`.
-- All errors return JSON: `{"error": "message"}` with appropriate HTTP status code.
-
-**Implementation steps:**
-
-1. Implement `HandleListProducts` — returns `[]model.Product` as JSON.
-2. Implement `HandleGetProduct` — finds product by ID, returns 404 if not found.
-3. Implement `HandleUpdateProduct` — deserializes JSON into `model.Product`, validates, saves.
-4. Implement `HandleImportCSV` — reads uploaded file, calls `csv.ReadGodaddyCSV`, stores products.
-5. Implement `HandleExportCSV` — calls `csv.WriteGodaddyCSV`, returns file as response.
-6. Add error handling wrapper for consistent JSON error responses.
-
-### Frontend: SPA Shell (`web/index.html`)
-
-**Overview**: Single HTML page with a header nav and a main content area that changes based on hash routing.
-
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Godaddy Ecommerce Manager</title>
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-  <header>
-    <h1>Godaddy Manager</h1>
-    <nav>
-      <a href="#/products">Products</a>
-      <a href="#/import">Import CSV</a>
-    </nav>
-  </header>
-  <main id="app"></main>
-  <script type="module" src="app.js"></script>
-</body>
-</html>
-```
-
-### Frontend: App Logic (`web/app.js`)
-
-**Overview**: Hash-based router that renders the appropriate view component into `#app`.
-
-```javascript
-// Routing
-const routes = {
-  '/products': renderProductList,
-  '/products/:id': renderProductDetail,
-  '/products/:id/edit': renderProductEdit,
-  '/import': renderImportView,
-};
-
-window.addEventListener('hashchange', handleRouting);
-handleRouting(); // Initial route
-```
-
-**Key decisions:**
-
-- Hash routing (`#/...`) avoids server-side routing complexity.
-- Each view component is a function that returns a DOM element (no framework — manual DOM manipulation).
-- State is shared: when a product is updated, the product list view re-renders from the shared data.
-
-**Implementation steps:**
-
-1. Build hash router — parse `window.location.hash`, match to route, extract params.
-2. Create `renderProductList()` — fetches `/api/products`, renders table of products.
-3. Create `renderProductDetail()` — fetches `/api/products/:id`, shows product info.
-4. Create `renderProductEdit()` — fetches product, renders editable form.
-5. Create `renderImportView()` — file upload form, calls `/api/products/import`.
-6. Wire up navigation links.
-
-### Frontend: Product List View (`web/components/product-list.js`)
-
-**Overview**: Table of all products showing name, family, variant count, status. Clickable rows to view/edit.
-
-```javascript
-function renderProductList(products) {
-  const table = document.createElement('table');
-  // Columns: Name, Family, Variants, Status, Actions (Edit)
-  // Each row has a link to #/products/:id/edit
+interface DownloadProjectResponse {
+  // JSON attachment body
 }
 ```
 
-**Key decisions:**
+**Key decisions**:
 
-- Filter by family (dropdown: All, INJES, RESTO, SNAPB).
-- Search bar to filter by product name.
-- Click a row → navigate to edit view.
+- Project save is a download, not a hidden server-side write. The operator should control where local files go.
+- Project load mirrors CSV import: upload one file, replace the in-memory catalog, re-render the UI.
+- Endpoints should reuse the Phase 1 serializer/parser rather than re-encode project state inline in the server layer.
 
-### Frontend: Product Edit View (`web/components/product-detail.js`)
+**Implementation steps**:
 
-**Overview**: Editable form for a single product. Shows product fields and a sub-table for variants.
+1. Add `POST /api/project/load` that parses an uploaded project document and replaces store contents.
+2. Add `POST /api/project/download` that returns the current project document as a downloadable JSON attachment.
+3. Add `POST /api/products/export` guard behavior: run validation and reject export when `canExport === false`.
+4. Return structured JSON errors so the UI can show the real reason export is blocked.
 
+**Feedback loop**:
+
+- **Playground**: Create `test/server/project-file-api.test.ts` before adding endpoints.
+- **Experiment**: Load a valid project file, try an unsupported project version, and attempt export with a blocked validation state.
+- **Check command**: `node --import tsx --test test/server/project-file-api.test.ts test/server/export-guard.test.ts`
+
+### Existing-Catalog Editing UI
+
+**Pattern to follow**: `web/app.js`
+
+**Overview**: Refine the existing single-page UI so it becomes a trustworthy editor for already-imported products and variants instead of a loose demo surface.
+
+```js
+async function handleLoadProject(file) {}
+async function handleSaveProject() {}
+async function handleExport() {}
+function renderValidationSummary(report) {}
 ```
-┌─────────────────────────────────────┐
-│ Product: In Jesus Name T-Shirt      │
-│ Family: [INJES ▼]   Status: [ACTIVE▼]│
-│ Price: [ $25.00 ]                   │
-│ Description: [ multiline textarea ]  │
-│                                     │
-│ ── Variants ────────────────────────│
-│ SKU │ Color  │ Size  │ Price  │ Delete│
-│ ────┼────────┼───────┼────────┼───────│
-│     │ Black  │ Small │ $25.00 │  [X]  │
-│     │ Black  │ Med   │ $25.00 │  [X]  │
-│     │ White  │ Small │ $25.00 │  [X]  │
-│ ────┴────────┴───────┴────────┴───────│
-│ [+ Add Variant]       [Save Product]  │
-└─────────────────────────────────────┘
-```
 
-**Key decisions:**
+**Key decisions**:
 
-- Variants are rendered inline as a table with editable cells.
-- "Save Product" calls `PUT /api/products/:id` with the full updated product object.
-- Changes are NOT auto-saved — user explicitly clicks Save. Prevents accidental data loss.
-- "Add Variant" adds an empty variant row inline. "Delete" removes a variant row.
+- Keep the UI in vanilla JS. The app is still small enough that a framework would slow implementation without improving the core workflow.
+- Preserve explicit save actions for product edits. Hidden autosave makes error recovery harder in a correctness-first tool.
+- Keep editing scoped to existing products and variants in this phase. Do not add net-new product creation yet.
 
-**Implementation steps:**
+**Implementation steps**:
 
-1. Build the product edit form with inputs for each field.
-2. Build the variant sub-table with inline editing.
-3. Handle "Add Variant" — append a blank row to the variant table.
-4. Handle "Delete" — remove the variant row from the DOM and the data model.
-5. Handle "Save Product" — collect form data, send PUT request, redirect to product list on success.
-6. Handle "Save failed" — show error message in UI.
+1. Add project-file save/load controls near the existing CSV import/export controls.
+2. Show export status in the UI: ready, blocked by errors, or warning-only.
+3. Preserve the product list + editor structure, but tighten field handling so updates are predictable and resilient.
+4. Refresh editor state after save/load/import actions to avoid stale data in the DOM.
 
-### Frontend: API Client (`web/utils/api.js`)
+**Feedback loop**:
 
-**Overview**: Thin wrapper around `fetch` for API calls.
+- **Playground**: Start the dev server with `npm run dev` before modifying the UI.
+- **Experiment**: Import CSV, edit a product name and variant price, save a project file, reload it, then export. Also test the blocked-export case.
+- **Check command**: `node --import tsx --test test/server/app.test.ts && npm run dev`
 
-```javascript
-async function apiGet(path) {
-  const res = await fetch(path);
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.json();
+### Export Guard and Validation UX
+
+**Pattern to follow**: `src/validator/validator.ts`, `web/app.js` validation dialog
+
+**Overview**: Export must become an intentional gated action. The operator needs clear reasons when export is blocked and a readable summary when only warnings remain.
+
+```ts
+interface ValidationReport {
+  issues: ValidationIssue[];
+  canExport: boolean;
 }
 
-async function apiPut(path, data) {
-  const res = await fetch(path, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Unknown error');
-  }
-  return res.json();
-}
-
-async function apiPostMultipart(path, file) {
-  const form = new FormData();
-  form.append('file', file);
-  const res = await fetch(path, { method: 'POST', body: form });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.blob(); // CSV download
+interface ExportBlockedResponse {
+  error: 'EXPORT_BLOCKED';
+  report: ValidationReport;
 }
 ```
 
-**Key decisions:**
+**Key decisions**:
 
-- No auth yet (localhost only, single user).
-- Errors thrown as `Error` objects with message strings — the UI catches and displays them.
+- The backend is the source of truth for export eligibility.
+- The UI may prefetch validation status, but it must not guess whether export is allowed.
+- Blocked export responses should include the same report structure the validation view uses so the UI does not fork logic.
+
+**Implementation steps**:
+
+1. Update the validation endpoint to return the richer Phase 1 report.
+2. Make export re-run validation server-side even if the UI showed a clean state earlier.
+3. When export is blocked, present a concise summary plus actionable issue lines.
+4. Keep warnings visible but non-blocking.
+
+**Feedback loop**:
+
+- **Playground**: Add a failing server test where duplicate SKUs exist and export is attempted.
+- **Experiment**: Compare warning-only vs error-bearing validation reports in the UI.
+- **Check command**: `node --import tsx --test test/server/export-guard.test.ts`
 
 ## Data Model
 
-No database changes. The in-memory `[]model.Product` is shared between the CSV layer and the API handlers. The frontend maintains its own copy of the data in JavaScript.
+_No new canonical model types are required in this phase._ Phase 2 should consume the Phase 1 `ProjectDocument` and `ValidationReport` shapes as-is.
 
 ## API Design
 
-| Method | Path                       | Request Body       | Response              |
-| ------ | -------------------------- | ------------------ | --------------------- |
-| `GET`  | `/api/products`            | —                  | `Product[]`           |
-| `GET`  | `/api/products/:id`        | —                  | `Product`             |
-| `PUT`  | `/api/products/:id`        | `Product` (full)   | `{ "success": true }` |
-| `POST` | `/api/products/import`     | `multipart/form-data` | `{ "imported": N }` |
-| `POST` | `/api/products/export`     | —                  | `text/csv` (download) |
+### New Endpoints
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/project/load` | Upload and load a saved local project document. |
+| `POST` | `/api/project/download` | Download the current in-memory project document. |
+
+### Modified Endpoints
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/products/validate` | Return `ValidationReport` instead of a bare issue list. |
+| `POST` | `/api/products/export` | Reject export when validation reports blocking issues. |
+
+### Request/Response Examples
+
+```ts
+// POST /api/project/load
+// multipart/form-data
+file=<godaddy-project.json>
+
+// Response
+{ "imported": 8 }
+
+// POST /api/products/export
+// Error response when blocked
+{
+  "error": "EXPORT_BLOCKED",
+  "report": {
+    "canExport": false,
+    "issues": [
+      {
+        "severity": "error",
+        "field": "variant:abc:sku",
+        "message": "Duplicate SKU detected: DUPLICATE.",
+        "blocksExport": true
+      }
+    ]
+  }
+}
+```
 
 ## Testing Requirements
 
 ### Unit Tests
 
-| Test File                     | Coverage                    |
-| ----------------------------- | --------------------------- |
-| `internal/server/handlers_test.go` | Each endpoint: happy path, error cases |
-| `internal/server/server_test.go`   | Routes registered, static files served |
+| Test File | Coverage |
+| --- | --- |
+| `test/server/project-file-api.test.ts` | Project save/load endpoint behavior and malformed-file handling. |
+| `test/server/export-guard.test.ts` | Export blocking, warning-only export, response payload shape. |
+| `test/server/app.test.ts` | Existing CRUD behavior still works after endpoint additions. |
 
-**Key test cases:**
+**Key test cases**:
 
-- `GET /api/products` returns 200 with product list
-- `GET /api/products/nonexistent` returns 404
-- `PUT /api/products/:id` updates a product and returns 200
-- `PUT /api/products/:id` with invalid JSON returns 400
-- `POST /api/products/import` accepts a CSV file and returns import count
-- `POST /api/products/export` returns a CSV blob with correct headers
-- Static file server returns `index.html` for `/`
+- Load valid project document replaces current store contents.
+- Load rejects unsupported `schemaVersion`.
+- Download returns JSON attachment with the expected document shape.
+- Export returns CSV when `canExport` is true.
+- Export returns a structured blocked response when validation fails.
+- Existing product CRUD still works after the new flows are added.
+
+### Integration Tests
+
+| Test File | Coverage |
+| --- | --- |
+| `test/server/app.test.ts` | Localhost editing + save/load + export flow over real HTTP requests. |
+
+**Key scenarios**:
+
+- CSV import → edit → save project → load project → export.
+- Validation error introduced in memory → export blocked.
+- Warning-only catalog → export allowed.
 
 ### Manual Testing
 
-- [ ] `go run cmd/godaddy-manager/main.go server --port 8080` — starts server
-- [ ] Open `http://localhost:8080` — see product list
-- [ ] Import a CSV file — products appear in the list
-- [ ] Edit a product name — click Save — changes persist after reload
-- [ ] Add a variant inline — click Save — variant appears in exported CSV
-- [ ] Export CSV — download file opens correctly in a text editor
+- [ ] Start the app and import the real fixture CSV.
+- [ ] Edit an existing product and variant, then download a project file.
+- [ ] Reload the project file and verify the edits return.
+- [ ] Introduce a duplicate SKU and verify export is blocked with a readable reason.
+- [ ] Fix the duplicate SKU and verify export succeeds.
 
 ## Error Handling
 
-| Error Scenario              | Handling Strategy                                      |
-| --------------------------- | ------------------------------------------------------ |
-| Product not found           | Return 404, UI shows "Product not found" message       |
-| Invalid JSON in PUT request | Return 400, UI shows validation error                  |
-| CSV parse error on import   | Return 400 with parse details, UI shows error          |
-| File upload too large       | Return 413, UI shows "File too large" message          |
-| Server crash                | Go's default panic handler (development); add recover middleware |
+| Error Scenario | Handling Strategy |
+| --- | --- |
+| Project file is malformed JSON | Return 400 with a parse/shape error; keep the current catalog untouched. |
+| Project file has unsupported schema version | Return 400 with a version-specific error. |
+| Export attempted while blocked | Return a structured validation report and do not stream CSV bytes. |
+| UI has stale selected product after reload | Re-resolve selection after refresh; if missing, clear editor state safely. |
 
 ## Failure Modes
 
-| Component       | Failure Mode              | Trigger                        | Impact                     | Mitigation                          |
-| --------------- | ------------------------- | ------------------------------ | -------------------------- | ----------------------------------- |
-| API Handler     | Concurrent PUT requests   | User clicks Save multiple times | Last-write-wins data loss  | Disable Save button after click     |
-| Frontend        | Stale data after PUT      | Another tab updated same data  | Overwrites external change | No multi-user support; document     |
-| Frontend        | Large product list (>100) | Many products loaded at once   | Slow render, memory usage  | Virtual scrolling (stretch goal)    |
-| Frontend        | Variant edit data loss    | Browser crash before Save     | Unsaved changes lost       | Warn on page unload with unsaved    |
-| Go Server       | Port already in use       | Another process on 8080        | Server fails to start      | Check `listen` error, show message  |
-| CSV Export      | Very long descriptions    | Description exceeds CSV field  | Truncated or malformed CSV | CSV writer handles quoting/escaping |
+| Component | Failure Mode | Trigger | Impact | Mitigation |
+| --- | --- | --- | --- | --- |
+| Project load | Destructive replacement | User loads the wrong file unintentionally | Current in-memory work disappears | Confirm load action in UI if unsaved changes exist |
+| Editor UI | Stale DOM state | Product list refreshes after save/load while editor inputs still reflect old objects | User overwrites newer state | Re-render editor from fresh store data after every mutating action |
+| Export guard | Frontend-only enforcement | UI thinks export is blocked but backend still allows it, or vice versa | Trust in the tool erodes | Keep backend as the final authority and reuse the same validation report structure |
+| Project download | Hidden transport drift | Server hand-builds JSON differently from project serializer | Saved files load inconsistently later | Reuse the Phase 1 serializer/parser in both directions |
 
 ## Validation Commands
 
 ```bash
-# Start server
-go run cmd/godaddy-manager/main.go server --port 8080
+# Type checking
+npm run typecheck
 
-# Test API directly
-curl -s http://localhost:8080/api/products | python3 -m json.tool
-curl -s -X POST http://localhost:8080/api/products/export -o test-output.csv
+# Linting
+npm run lint
 
-# Run all tests
-go test ./...
+# Scoped Phase 2 tests
+node --import tsx --test test/server/app.test.ts test/server/project-file-api.test.ts test/server/export-guard.test.ts
+
+# Full test suite
+npm test
+
+# Run the local app
+npm run dev
 ```
 
 ## Rollout Considerations
 
-- No deployment — runs on localhost only.
-- The `web/` directory is served as static files. If the backend binary is built with `go embed`, the web files are embedded (preferred for the single-binary requirement).
-
-```go
-//go:embed web
-var webFS embed.FS
-```
+- No feature flag is required; this phase formalizes the current localhost UI instead of changing deployment shape.
+- Keep the UI forgiving for warning-only states, but never silent about them.
+- If unsaved-change prompts are added, keep them local to the browser and do not entangle them with persistence logic.
 
 ## Open Items
 
-- [ ] CSS framework or hand-rolled styles? (Recommend hand-rolled for simplicity — 1 page SPA)
-- [ ] Should the import endpoint auto-parse and populate products, or just validate and show a preview first?
-- [ ] Keyboard shortcuts for power users (e.g., Ctrl+S to save, Escape to cancel)?
+- [ ] Decide whether the app should track a visible “dirty” indicator before project save/load flows are finalized.
+- [ ] Decide whether project download filenames should include the original import name or just a timestamped default.
 
 ---
 

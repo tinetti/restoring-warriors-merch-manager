@@ -22,6 +22,17 @@ It replaces the painful parts of the Godaddy admin UI with a small local web app
 npm install
 ```
 
+## Just commands
+
+If you use [`just`](https://github.com/casey/just), the repository includes a `justfile` with the most common workflows:
+
+```bash
+just          # list recipes
+just dev
+just check
+just server
+```
+
 ## Run the app
 
 Start the local server:

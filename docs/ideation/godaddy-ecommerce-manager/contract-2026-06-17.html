@@ -1006,7 +1006,7 @@ body {
 
     </style>
   </head>
-  <body data-contract-status="Draft">
+  <body data-contract-status="Approved">
 
     <header class="deck-header">
       <div class="deck-id">
@@ -1015,10 +1015,10 @@ body {
           <h1 class="deck-title">Godaddy Ecommerce Manager</h1>
         </div>
         <div class="deck-meta">
-          <span class="status-ind status-caution"><span class="status-dot" aria-hidden="true"></span>Draft</span>
-          <span class="mono-meta">created 2026-06-18</span>
+          <span class="status-ind status-go"><span class="status-dot" aria-hidden="true"></span>Approved</span>
+          <span class="mono-meta">created 2026-06-17</span>
           
-          <span class="mono-meta">supersedes contract-2026-06-17.html</span>
+          
           <button type="button" class="theme-toggle" id="theme-toggle">theme · auto</button>
         </div>
       </div>
@@ -1031,32 +1031,43 @@ body {
         <div class="gate-cell">
           <span class="gate-mark" style="color: var(--go)">✓</span>
           <span class="gate-name">Problem Clarity</span>
-          <span class="gate-evidence">The primary user is a single store operator who loses hours during recurring catalog updates and sometimes ships bad variant, price, or SKU data through Godaddy's painful catalog workflow.</span>
+          <span class="gate-evidence">Friend's Godaddy store UI is buggy and cumbersome for managing SKUs, prices, and variants; CSV is the known bridge format</span>
         </div>
         <div class="gate-cell">
           <span class="gate-mark" style="color: var(--go)">✓</span>
           <span class="gate-name">Goal Definition</span>
-          <span class="gate-evidence">Phase 1 is correctness-first: routine catalog updates should no longer require hand-editing CSVs, and preventable import mistakes should be eliminated in the normal workflow.</span>
+          <span class="gate-evidence">Variants and SKU rules handled cleanly, AI-assisted product descriptions, save time and reduce errors — all explicitly stated</span>
         </div>
         <div class="gate-cell">
           <span class="gate-mark" style="color: var(--go)">✓</span>
           <span class="gate-name">Success Criteria</span>
-          <span class="gate-evidence">Done is defined by representative round-trip tests, blocked invalid exports, project-file persistence checks, and variant-completion SKU tests.</span>
+          <span class="gate-evidence">Import file parses correctly and products appear correctly on Godaddy; idempotent uploads confirmed; AI rewrite tested per-product</span>
         </div>
         <div class="gate-cell">
           <span class="gate-mark" style="color: var(--go)">✓</span>
           <span class="gate-name">Scope Boundaries</span>
-          <span class="gate-evidence">MVP is a localhost catalog editor with safe CSV round-trip, project-file persistence, validation, and missing-combination generation; images, bulk authoring, and AI are explicitly deferred by tier.</span>
+          <span class="gate-evidence">Explicitly defined: no payment/checkout, no order/inventory sync, no Godaddy API integration (CSV-only)</span>
         </div>
         <div class="gate-cell">
           <span class="gate-mark" style="color: var(--go)">✓</span>
           <span class="gate-name">Consistency</span>
-          <span class="gate-evidence">The SKU tension is resolved: existing SKUs remain unchanged, while only newly generated variants receive inferred or fallback-generated SKUs.</span>
+          <span class="gate-evidence">No contradictions found across all interview decisions and artifacts</span>
         </div>
       </div>
     </header>
     <main>
 
+    <section class="run-bar">
+      <div>
+        <div class="label label-accent">First move</div>
+        <div class="run-bar-headline">Run this.</div>
+        <div class="run-bar-desc">Phase 01 of 04 — <strong>Data Layer &amp; CSV I/O</strong></div>
+      </div>
+      <div class="cmd-field">
+            <span class="cmd-field-text" id="cmd-first">/ideation:execute-spec docs/ideation/godaddy-ecommerce-manager/spec-phase-1.md</span>
+            <button type="button" class="copy-btn" data-copy="cmd-first">copy</button>
+          </div>
+    </section>
 
     <div class="section two-col">
       <section>
@@ -1065,9 +1076,9 @@ body {
         <span class="section-hdr-rule"></span>
       </div>
         <div class="prose">
-          <p><span class="line-num">01</span>A single operator maintains a Godaddy merch catalog through a workflow that is slow, brittle, and biased toward mistakes. The painful parts are not checkout or storefront concerns; they are catalog-maintenance concerns: variant combinations, prices, option values, and SKU correctness.</p>
-          <p><span class="line-num">02</span>The current Godaddy flow forces the operator too close to a vendor-specific CSV shape. That means routine updates consume hours, missing variant combinations are hard to reason about, and bad edits can leak into customer-facing catalog data.</p>
-          <p><span class="line-num">03</span>The product needs to make normal catalog maintenance safe enough that the operator no longer hand-edits CSV files for routine work, while still preserving the exact data Godaddy depends on when existing variants are re-exported.</p>
+          <p><span class="line-num">01</span>The user's friend manages a Godaddy ecommerce store selling branded merchandise (t-shirts, hats, mugs) across 3 product families.</p>
+          <p><span class="line-num">02</span>Godaddy's store management UI is primitive and buggy for handling SKUs, pricing, variants, and product descriptions — making even basic operations tedious and error-prone.</p>
+          <p><span class="line-num">03</span>The CSV export/import is the only reliable bridge, but Godaddy's CSV format is cumbersome: auto-generated SKUs are cryptic, variant relationships are implicit, and image handling is opaque.</p>
         </div>
       </section>
       <section>
@@ -1079,15 +1090,15 @@ body {
         <div class="goal-list">
           <div class="goal-row">
             <span class="goal-num">01</span>
-            <span class="goal-text">Eliminate preventable import mistakes in the normal catalog-maintenance workflow by blocking invalid exports before they reach Godaddy.</span>
+            <span class="goal-text">Handle variants and SKU rules cleanly — auto-generate readable, consistent SKUs from variant attributes instead of Godaddy's cryptic format</span>
           </div>
           <div class="goal-row">
             <span class="goal-num">02</span>
-            <span class="goal-text">Make the localhost app the normal editing surface for routine catalog updates so the operator no longer needs to hand-edit the Godaddy CSV for ordinary changes.</span>
+            <span class="goal-text">AI-assisted product descriptions — per-product rewrite button for generating or improving product copy</span>
           </div>
           <div class="goal-row">
             <span class="goal-num">03</span>
-            <span class="goal-text">Support completing existing products by defining allowed option sets and generating missing variant combinations without breaking existing SKU identity.</span>
+            <span class="goal-text">Save time and reduce errors — local web app for comfortable editing, validated CSV export for import</span>
           </div>
         </div>
       </section>
@@ -1103,36 +1114,36 @@ body {
         <li class="criteria-item">
           <span class="line-num">01</span>
           <div class="criteria-body">
-            <span>A representative Godaddy catalog can be imported, edited, exported, and re-imported without corrupting product-to-variant relationships, prices, option values, or existing SKU identity.</span>
-            <code class="criteria-check">node --import tsx --test test/workflows/roundtrip.test.ts — exits 0</code>
+            <span>Import CSV parses correctly and products appear correctly on Godaddy after import</span>
+            <code class="criteria-check">npx tsx src/index.ts export --input products.json --output test-export.csv &amp;&amp; diff test-export.csv godaddy-products-export.csv (structural comparison — column order, variant relationships, SKU format)</code>
           </div>
         </li>
         <li class="criteria-item">
           <span class="line-num">02</span>
           <div class="criteria-body">
-            <span>The app blocks export when structural catalog mistakes would make the output unsafe, including broken variant relationships, duplicate SKUs, or incomplete required option data.</span>
-            <code class="criteria-check">node --import tsx --test test/validator/export-safety.test.ts — exits 0</code>
+            <span>Idempotent uploads — re-running export doesn't create duplicates or corrupt data</span>
+            <code class="criteria-check">npx tsx src/index.ts export --input products.json --output export-1.csv &amp;&amp; npx tsx src/index.ts export --input products.json --output export-2.csv &amp;&amp; diff export-1.csv export-2.csv (should produce identical files)</code>
           </div>
         </li>
         <li class="criteria-item">
           <span class="line-num">03</span>
           <div class="criteria-body">
-            <span>An operator can define allowed option sets for an existing product and generate the missing variant combinations while preserving all pre-existing SKUs and assigning inferred or fallback SKUs only to the new variants.</span>
-            <code class="criteria-check">node --import tsx --test test/model/variant-completion.test.ts — exits 0</code>
+            <span>SKU auto-generation produces consistent, readable SKUs from variant attributes</span>
+            <code class="criteria-check">npx tsx src/index.ts export --input products.json --output test-export.csv &amp;&amp; grep -c 'SKU' test-export.csv | assert &gt; 0 &amp;&amp; grep SKU test-export.csv | awk -F, '{print $1}' | sort -u | assert count matches expected unique SKU count</code>
           </div>
         </li>
         <li class="criteria-item">
           <span class="line-num">04</span>
           <div class="criteria-body">
-            <span>Edits survive between sessions through an explicit local project-file save/load workflow rather than requiring one uninterrupted editing session.</span>
-            <code class="criteria-check">node --import tsx --test test/project-file/persistence.test.ts — exits 0</code>
+            <span>Images are organized into the correct directory structure for Godaddy import</span>
+            <code class="criteria-check">npx tsx src/index.ts export --input products.json --output test-export.csv &amp;&amp; find ./godaddy-images/ -type f | assert count matches number of unique product images</code>
           </div>
         </li>
         <li class="criteria-item">
           <span class="line-num">05</span>
           <div class="criteria-body">
-            <span>A routine catalog update can be completed in the app without hand-editing the raw Godaddy CSV.</span>
-            <code class="criteria-check">Judgment call — walk a representative update from import through export without opening the CSV in an editor</code>
+            <span>AI rewrite produces a usable product description for review</span>
+            <code class="criteria-check">Judgment call — human verifies rewritten description is readable, appropriate, and better than the original</code>
           </div>
         </li>
       </ul>
@@ -1146,9 +1157,9 @@ body {
       </div>
       <div class="scope-layout">
         <div class="nested-tiers" aria-hidden="true">
-          <div class="tier-box tier-box-stretch"><span class="tier-box-label">Stretch ×1</span></div>
-          <div class="tier-box tier-box-full"><span class="tier-box-label">Full ×3</span></div>
-          <div class="tier-box tier-box-mvp"><span class="tier-box-label">MVP ×7</span></div>
+          <div class="tier-box tier-box-stretch"><span class="tier-box-label">Stretch ×3</span></div>
+          <div class="tier-box tier-box-full"><span class="tier-box-label">Full ×4</span></div>
+          <div class="tier-box tier-box-mvp"><span class="tier-box-label">MVP ×5</span></div>
         </div>
         <div class="tier-lists">
 
@@ -1156,16 +1167,14 @@ body {
             <div class="tier-header">
               <span class="tier-title">MVP — must ship</span>
               <span class="tier-rule"></span>
-              <span class="tier-count">×7</span>
+              <span class="tier-count">×5</span>
             </div>
             <ul class="tier-items">
-              <li><strong>Import a Godaddy CSV into a cleaner internal catalog model</strong><span class="tier-reason">— The app must stop leaking vendor CSV awkwardness into normal editing</span></li>
-              <li><strong>Save and load a local project file between sessions</strong><span class="tier-reason">— Session-only editing would make the workflow too fragile for real catalog work</span></li>
-              <li><strong>Localhost web app for editing existing products and variants, including prices, option values, and SKU fields</strong><span class="tier-reason">— The primary user needs a safe day-to-day editing surface for an existing catalog</span></li>
-              <li><strong>Define allowed option sets for an existing product and generate missing variant combinations</strong><span class="tier-reason">— Closing catalog gaps is a core pain point, not a later optimization</span></li>
-              <li><strong>Preserve existing SKUs exactly while inferring or generating SKUs only for newly created variants</strong><span class="tier-reason">— This preserves catalog identity while removing the manual work of filling missing combinations</span></li>
-              <li><strong>Pre-export validation that blocks unsafe exports</strong><span class="tier-reason">— Correctness-first MVP requires guardrails, not just transformation</span></li>
-              <li><strong>Export a Godaddy-compatible CSV that round-trips safely</strong><span class="tier-reason">— CSV remains the only approved bridge to Godaddy in this plan</span></li>
+              <li><strong>CSV import: read and parse Godaddy's export CSV format</strong><span class="tier-reason">— Foundation for everything — without parsing the source format, nothing else works</span></li>
+              <li><strong>Local web app: browse and edit products with variants</strong><span class="tier-reason">— Core interaction model — replaces the buggy Godaddy UI</span></li>
+              <li><strong>Variant/SKU management: auto-generate SKUs from variant attributes</strong><span class="tier-reason">— Primary pain point identified in the interview</span></li>
+              <li><strong>CSV export: write valid Godaddy-importable CSV</strong><span class="tier-reason">— Delivery mechanism — the only way to push changes to Godaddy</span></li>
+              <li><strong>Image handling: organize images into the directory structure Godaddy expects</strong><span class="tier-reason">— Images are part of the product data that Godaddy's importer scans</span></li>
             </ul>
           </div>
 
@@ -1173,12 +1182,13 @@ body {
             <div class="tier-header">
               <span class="tier-title">Full — target outcome</span>
               <span class="tier-rule"></span>
-              <span class="tier-count">×3</span>
+              <span class="tier-count">×4</span>
             </div>
             <ul class="tier-items">
-              <li><strong>Image handling and export packaging</strong><span class="tier-reason">— This is the nearest adjacent workflow once structured catalog data is safe</span></li>
-              <li><strong>Bulk editing helpers across many products or variants</strong><span class="tier-reason">— Once the single-product workflow is correct, repetitive catalog work becomes the next speed bottleneck</span></li>
-              <li><strong>Create new products and product families from scratch</strong><span class="tier-reason">— This expands the tool from maintenance into fuller catalog authoring</span></li>
+              <li><strong>AI-assisted product descriptions: per-product rewrite button</strong><span class="tier-reason">— Explicitly requested goal; improves description quality</span></li>
+              <li><strong>Price management: easy bulk or per-product price editing</strong><span class="tier-reason">— Variants pricing is tedious in Godaddy UI</span></li>
+              <li><strong>Validation: pre-export checks for common Godaddy import errors</strong><span class="tier-reason">— Reduces failed imports and data corruption</span></li>
+              <li><strong>Product family management: group by brand (In Jesus Name, Restoring Warriors, Snapback)</strong><span class="tier-reason">— Real-world organizing principle from the interview</span></li>
             </ul>
           </div>
 
@@ -1186,10 +1196,12 @@ body {
             <div class="tier-header">
               <span class="tier-title">Stretch — if time permits</span>
               <span class="tier-rule"></span>
-              <span class="tier-count">×1</span>
+              <span class="tier-count">×3</span>
             </div>
             <ul class="tier-items">
-              <li><strong>AI-assisted product description rewriting</strong><span class="tier-reason">— Useful merchandising support, but it does not improve the core correctness path</span></li>
+              <li><strong>Bulk AI rewrite across all products</strong><span class="tier-reason">— Convenience, not necessity</span></li>
+              <li><strong>Version history / diff view between edits</strong><span class="tier-reason">— Nice-to-have for audit trail</span></li>
+              <li><strong>Direct Godaddy API integration (future when API is better)</strong><span class="tier-reason">— CSV-only is intentional MVP constraint</span></li>
             </ul>
           </div>
         </div>
@@ -1199,18 +1211,18 @@ body {
         <div class="scope-panel scope-panel-out">
           <span class="label label-danger">Out of scope — said no on purpose</span>
           <ul class="scope-list">
-            <li><span class="scope-out-item">Payment, checkout, or storefront behavior</span> — The product is a catalog-management tool, not a commerce front end</li>
-            <li><span class="scope-out-item">Order sync or inventory-management workflows</span> — Those are adjacent operational systems, not part of this catalog-maintenance problem</li>
-            <li><span class="scope-out-item">Hosted multi-user collaboration</span> — Phase 1 targets a single operator using a localhost tool</li>
-            <li><span class="scope-out-item">Direct Godaddy API synchronization</span> — This plan is intentionally CSV-bridge-only for now</li>
+            <li><span class="scope-out-item">Payment / checkout functionality</span> — This is a management tool, not a storefront</li>
+            <li><span class="scope-out-item">Order sync or inventory management</span> — Not needed for the friend's workflow</li>
+            <li><span class="scope-out-item">Godaddy API integration</span> — CSV is the only reliable bridge; API would be a future consideration</li>
+            <li><span class="scope-out-item">Multi-user support</span> — Single user (the friend) for now</li>
           </ul>
         </div>
         <div class="scope-panel">
           <span class="label">Future — someday, maybe</span>
           <ul class="scope-list">
-            <li>Direct API integration if Godaddy later offers a reliable path</li>
+            <li>Codex integration — how AI assistants fit into the workflow</li>
+            <li>Direct Godaddy API once their API is stable</li>
             <li>Multi-store support</li>
-            <li>Richer collaboration or review workflows</li>
           </ul>
         </div>
       </div>
@@ -1218,12 +1230,12 @@ body {
 
     <section class="section">
       <div class="section-hdr">
-        <span class="label">Plan</span>
+        <span class="label">Execution</span>
         <span class="section-hdr-rule"></span>
         <span class="section-count">Sequential</span>
       </div>
       <div class="panel pipeline-wrap">
-        <svg class="pipeline" viewBox="0 0 1532 76" role="img" aria-label="Phase pipeline: 01 Core Catalog Model, CSV Bridge, and Project Persistence (wave 1); 02 Catalog Editing App for Existing Data (wave 2); 03 Variant Completion and New-SKU Inference (wave 3); 04 Image Handling and Export Packaging (wave 4); 05 Bulk Editing and Catalog Authoring (wave 5); 06 AI Merchandising Assist (wave 6) — 6 waves">
+        <svg class="pipeline" viewBox="0 0 1004 76" role="img" aria-label="Phase pipeline: 01 Data Layer &amp; CSV I/O (wave 1); 02 Web App UI (wave 2); 03 Variant/SKU Management &amp; Image Handling (wave 3); 04 AI Description &amp; Polish (wave 4) — 4 waves">
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
               <path class="edge-head" d="M0,0 L10,5 L0,10 z" />
@@ -1232,14 +1244,12 @@ body {
       <path class="edge" d="M 206 38 H 263" marker-end="url(#arrow)" />
       <path class="edge" d="M 470 38 H 527" marker-end="url(#arrow)" />
       <path class="edge" d="M 734 38 H 791" marker-end="url(#arrow)" />
-      <path class="edge" d="M 998 38 H 1055" marker-end="url(#arrow)" />
-      <path class="edge" d="M 1262 38 H 1319" marker-end="url(#arrow)" />
       <g class="node">
         <rect class="node-box" x="6" y="6" width="200" height="64" rx="5" />
-        <line class="node-rail" x1="7" y1="7.5" x2="205" y2="7.5" stroke="var(--danger)" />
+        <line class="node-rail" x1="7" y1="7.5" x2="205" y2="7.5" stroke="var(--caution)" />
         <text class="node-num" x="18" y="28">01</text>
-        <text class="node-kind" x="194" y="28" text-anchor="end" fill="var(--danger)">high</text>
-        <text class="node-title" x="18" y="47">Core Catalog Model, CSV B…</text>
+        <text class="node-kind" x="194" y="28" text-anchor="end" fill="var(--caution)">med</text>
+        <text class="node-title" x="18" y="47">Data Layer &amp; CSV I/O</text>
         <text class="node-kind" x="18" y="62">phase · blocking</text>
       </g>
       <g class="node">
@@ -1247,40 +1257,24 @@ body {
         <line class="node-rail" x1="271" y1="7.5" x2="469" y2="7.5" stroke="var(--caution)" />
         <text class="node-num" x="282" y="28">02</text>
         <text class="node-kind" x="458" y="28" text-anchor="end" fill="var(--caution)">med</text>
-        <text class="node-title" x="282" y="47">Catalog Editing App for E…</text>
+        <text class="node-title" x="282" y="47">Web App UI</text>
         <text class="node-kind" x="282" y="62">phase · blocking</text>
       </g>
       <g class="node">
         <rect class="node-box" x="534" y="6" width="200" height="64" rx="5" />
-        <line class="node-rail" x1="535" y1="7.5" x2="733" y2="7.5" stroke="var(--caution)" />
+        <line class="node-rail" x1="535" y1="7.5" x2="733" y2="7.5" stroke="var(--go)" />
         <text class="node-num" x="546" y="28">03</text>
-        <text class="node-kind" x="722" y="28" text-anchor="end" fill="var(--caution)">med</text>
-        <text class="node-title" x="546" y="47">Variant Completion and Ne…</text>
+        <text class="node-kind" x="722" y="28" text-anchor="end" fill="var(--go)">low</text>
+        <text class="node-title" x="546" y="47">Variant/SKU Management &amp; …</text>
         <text class="node-kind" x="546" y="62">phase · blocking</text>
       </g>
       <g class="node">
         <rect class="node-box" x="798" y="6" width="200" height="64" rx="5" />
-        <line class="node-rail" x1="799" y1="7.5" x2="997" y2="7.5" stroke="var(--caution)" />
+        <line class="node-rail" x1="799" y1="7.5" x2="997" y2="7.5" stroke="var(--go)" />
         <text class="node-num" x="810" y="28">04</text>
-        <text class="node-kind" x="986" y="28" text-anchor="end" fill="var(--caution)">med</text>
-        <text class="node-title" x="810" y="47">Image Handling and Export…</text>
+        <text class="node-kind" x="986" y="28" text-anchor="end" fill="var(--go)">low</text>
+        <text class="node-title" x="810" y="47">AI Description &amp; Polish</text>
         <text class="node-kind" x="810" y="62">phase</text>
-      </g>
-      <g class="node">
-        <rect class="node-box" x="1062" y="6" width="200" height="64" rx="5" />
-        <line class="node-rail" x1="1063" y1="7.5" x2="1261" y2="7.5" stroke="var(--caution)" />
-        <text class="node-num" x="1074" y="28">05</text>
-        <text class="node-kind" x="1250" y="28" text-anchor="end" fill="var(--caution)">med</text>
-        <text class="node-title" x="1074" y="47">Bulk Editing and Catalog …</text>
-        <text class="node-kind" x="1074" y="62">phase</text>
-      </g>
-      <g class="node">
-        <rect class="node-box" x="1326" y="6" width="200" height="64" rx="5" />
-        <line class="node-rail" x1="1327" y1="7.5" x2="1525" y2="7.5" stroke="var(--go)" />
-        <text class="node-num" x="1338" y="28">06</text>
-        <text class="node-kind" x="1514" y="28" text-anchor="end" fill="var(--go)">low</text>
-        <text class="node-title" x="1338" y="47">AI Merchandising Assist</text>
-        <text class="node-kind" x="1338" y="62">phase</text>
       </g>
         </svg>
       </div>
@@ -1298,56 +1292,101 @@ body {
           <tbody>
             <tr>
               <td class="phase-num">01</td>
-              <td class="phase-title">Core Catalog Model, CSV Bridge, and Project Persistence</td>
+              <td class="phase-title">Data Layer &amp; CSV I/O</td>
               <td class="phase-kind">phase · blocking</td>
-              <td class="phase-risk" style="color: var(--danger)">high</td>
-              <td class="phase-notes phase-notes-col">Define the canonical internal model, import/export mapping, local project-file persistence, and baseline validation rules.</td>
+              <td class="phase-risk" style="color: var(--caution)">med</td>
+              <td class="phase-notes phase-notes-col">Parse Godaddy's CSV export format, model products/variants in-memory, write valid CSV back. This is the foundation — nothing else can proceed without it.</td>
             </tr>
             <tr>
               <td class="phase-num">02</td>
-              <td class="phase-title">Catalog Editing App for Existing Data</td>
+              <td class="phase-title">Web App UI</td>
               <td class="phase-kind">phase · blocking</td>
               <td class="phase-risk" style="color: var(--caution)">med</td>
-              <td class="phase-notes phase-notes-col">Build the localhost editing surface for existing products, variants, prices, and SKU fields using the canonical model.</td>
+              <td class="phase-notes phase-notes-col">Local web app for browsing and editing products with variant support. HTML/JS frontend + lightweight backend.</td>
             </tr>
             <tr>
               <td class="phase-num">03</td>
-              <td class="phase-title">Variant Completion and New-SKU Inference</td>
+              <td class="phase-title">Variant/SKU Management &amp; Image Handling</td>
               <td class="phase-kind">phase · blocking</td>
-              <td class="phase-risk" style="color: var(--caution)">med</td>
-              <td class="phase-notes phase-notes-col">Let the operator define option sets, detect missing combinations, generate missing variants, and infer SKUs for only the new rows.</td>
+              <td class="phase-risk" style="color: var(--go)">low</td>
+              <td class="phase-notes phase-notes-col">Auto-generate SKUs from variant attributes, organize images into Godaddy's expected directory structure.</td>
             </tr>
             <tr>
               <td class="phase-num">04</td>
-              <td class="phase-title">Image Handling and Export Packaging</td>
-              <td class="phase-kind">phase</td>
-              <td class="phase-risk" style="color: var(--caution)">med</td>
-              <td class="phase-notes phase-notes-col">Add image management and whatever export packaging is required to ship a complete Godaddy import bundle.</td>
-            </tr>
-            <tr>
-              <td class="phase-num">05</td>
-              <td class="phase-title">Bulk Editing and Catalog Authoring</td>
-              <td class="phase-kind">phase</td>
-              <td class="phase-risk" style="color: var(--caution)">med</td>
-              <td class="phase-notes phase-notes-col">Expand from safe maintenance into faster cross-catalog edits and net-new product creation.</td>
-            </tr>
-            <tr>
-              <td class="phase-num">06</td>
-              <td class="phase-title">AI Merchandising Assist</td>
+              <td class="phase-title">AI Description &amp; Polish</td>
               <td class="phase-kind">phase</td>
               <td class="phase-risk" style="color: var(--go)">low</td>
-              <td class="phase-notes phase-notes-col">Add optional AI-assisted product-description support after the core catalog workflow is stable.</td>
+              <td class="phase-notes phase-notes-col">Per-product AI rewrite button, price management, validation, product family grouping.</td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <div class="approval-bar">
-        <span class="status-ind status-caution"><span class="status-dot" aria-hidden="true"></span>Awaiting approval</span>
-        <div class="approval-desc">Approve this contract in the session. Specs are then generated per phase, and this brief regenerates with its run commands.</div>
+      <div class="run-bar">
+        <div>
+          <div class="label label-accent">Run all phases</div>
+          <div class="run-bar-headline">Autopilot.</div>
+          <div class="run-bar-desc">Reads the contract, walks the dependency graph, and dispatches phases automatically.</div>
+        </div>
+        <div class="cmd-field">
+            <span class="cmd-field-text" id="cmd-autopilot">/ideation:autopilot</span>
+            <button type="button" class="copy-btn" data-copy="cmd-autopilot">copy</button>
+          </div>
       </div>
+
+      <details class="disclosure">
+        <summary>Run phases individually (4)</summary>
+        <div class="disclosure-body">
+          <div class="cmd-list">
+            <div class="cmd-row">
+              <span class="cmd-row-num">01</span>
+              <span class="cmd-row-title">Data Layer &amp; CSV I/O</span>
+              <div class="cmd-field">
+            <span class="cmd-field-text" id="cmd-1">/ideation:execute-spec docs/ideation/godaddy-ecommerce-manager/spec-phase-1.md</span>
+            <button type="button" class="copy-btn" data-copy="cmd-1">copy</button>
+          </div>
+            </div>
+            <div class="cmd-row">
+              <span class="cmd-row-num">02</span>
+              <span class="cmd-row-title">Web App UI</span>
+              <div class="cmd-field">
+            <span class="cmd-field-text" id="cmd-2">/ideation:execute-spec docs/ideation/godaddy-ecommerce-manager/spec-phase-2.md</span>
+            <button type="button" class="copy-btn" data-copy="cmd-2">copy</button>
+          </div>
+            </div>
+            <div class="cmd-row">
+              <span class="cmd-row-num">03</span>
+              <span class="cmd-row-title">Variant/SKU Management &amp; Image Handling</span>
+              <div class="cmd-field">
+            <span class="cmd-field-text" id="cmd-3">/ideation:execute-spec docs/ideation/godaddy-ecommerce-manager/spec-phase-3.md</span>
+            <button type="button" class="copy-btn" data-copy="cmd-3">copy</button>
+          </div>
+            </div>
+            <div class="cmd-row">
+              <span class="cmd-row-num">04</span>
+              <span class="cmd-row-title">AI Description &amp; Polish</span>
+              <div class="cmd-field">
+            <span class="cmd-field-text" id="cmd-4">/ideation:execute-spec docs/ideation/godaddy-ecommerce-manager/spec-phase-4.md</span>
+            <button type="button" class="copy-btn" data-copy="cmd-4">copy</button>
+          </div>
+            </div>
+          </div>
+        </div>
+      </details>
+
     </section>
 
+    <section class="contract-close">
+      <div>
+        <div class="label label-accent">Contract approved</div>
+        <div class="close-headline">This plan is the commitment.</div>
+        <div class="close-desc">4 phases · Sequential. Scope changes mean a new revision that supersedes this brief — not silent drift.</div>
+      </div>
+      <div class="close-meta">
+        <span class="status-ind status-go"><span class="status-dot" aria-hidden="true"></span>Approved</span>
+        <span class="mono-meta">2026-06-17</span>
+      </div>
+    </section>
     </main>
 
     <script>
